@@ -1,0 +1,36 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>$(FrameworkVersion)</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="18.8.1" />
+    <PackageReference Include="xunit" Version="2.9.*" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="3.1.5" />
+    <!-- Emits the opencover report the sonar workflow feeds to SonarCloud. -->
+    <PackageReference Include="coverlet.collector" Version="10.0.1" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- The game's own protobuf-net, not the NuGet package: what these tests assert is the
+         byte layout the shipped mod actually produces, so they have to run against the
+         exact library the server loads. Same resolution convention as Nimbus.ServerMod,
+         but Private=true because the test host needs the dll beside the test assembly. -->
+    <Reference Include="protobuf-net" HintPath="..\..\.vanilla\Lib\protobuf-net.dll" Private="true" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- The packet contracts are compiled from the mod's own source file rather than
+         referenced through Nimbus.ServerMod.dll. Nimbus.ServerMod.Tests deliberately keeps
+         no compile-time reference to the mod (the ModLoader loads its own copy, so the
+         types would never be identity-equal) and every test in it boots a real embedded
+         Vintage Story server, which is a heavy way to check a serializer. Linking the file
+         gives these tests the real declarations, with no VintagestoryAPI dependency and no
+         game boot, so they run anywhere and finish in milliseconds. It is a link, not a
+         copy, so the contracts under test cannot drift from the ones that ship. -->
+    <Compile Include="..\Nimbus.ServerMod\Protocol\NimbusPackets.cs" Link="NimbusPackets.cs" />
+  </ItemGroup>
+</Project>

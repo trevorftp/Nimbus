@@ -4,6 +4,7 @@
   <Project Path="Nimbus.SamplePlugin/Nimbus.SamplePlugin.csproj" />
   <Project Path="Nimbus.ServerMod/Nimbus.ServerMod.csproj" />
   <Project Path="Nimbus.ServerMod.Tests/Nimbus.ServerMod.Tests.csproj" />
+  <Project Path="Nimbus.ServerMod.Protocol.Tests/Nimbus.ServerMod.Protocol.Tests.csproj" />
   <Project Path="Nimbus.Registry.Core/Nimbus.Registry.Core.csproj" />
   <Project Path="Nimbus.Registry.Core.Tests/Nimbus.Registry.Core.Tests.csproj" />
   <Project Path="Nimbus.Registry/Nimbus.Registry.csproj" />

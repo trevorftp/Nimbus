@@ -118,7 +118,8 @@ jobs:
       - name: Tests with coverage
         run: |
           set -e
-          for p in Nimbus.Registry.Core.Tests Nimbus.Proxy.Tests Nimbus.Cli.Tests Nimbus.ServerMod.Tests; do
+          for p in Nimbus.Registry.Core.Tests Nimbus.Proxy.Tests Nimbus.Cli.Tests \
+                   Nimbus.ServerMod.Protocol.Tests Nimbus.ServerMod.Tests; do
             dotnet test "$p/$p.csproj" -c Release --no-build \
               --collect:"XPlat Code Coverage;Format=opencover" \
               --results-directory TestResults

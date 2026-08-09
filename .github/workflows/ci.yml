@@ -66,7 +66,7 @@ jobs:
           for p in Nimbus.Shared Nimbus.Api Nimbus.SamplePlugin Nimbus.Registry.Core \
                    Nimbus.Registry Nimbus.Proxy Nimbus.Cli Nimbus.ServerMod \
                    Nimbus.Registry.Core.Tests Nimbus.Proxy.Tests Nimbus.Cli.Tests \
-                   Nimbus.ServerMod.Tests; do
+                   Nimbus.ServerMod.Protocol.Tests Nimbus.ServerMod.Tests; do
             dotnet build "$p/$p.csproj" -c Release
           done
 
@@ -89,6 +89,13 @@ jobs:
           dotnet test Nimbus.Cli.Tests/Nimbus.Cli.Tests.csproj \
             -c Release --no-build \
             --logger "trx;LogFileName=cli-tests.trx" \
+            --results-directory TestResults
+
+      - name: ServerMod protocol unit tests
+        run: |
+          dotnet test Nimbus.ServerMod.Protocol.Tests/Nimbus.ServerMod.Protocol.Tests.csproj \
+            -c Release --no-build \
+            --logger "trx;LogFileName=servermod-protocol-tests.trx" \
             --results-directory TestResults
 
       - name: ServerMod integration tests
