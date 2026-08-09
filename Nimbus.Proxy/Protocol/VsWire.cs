@@ -93,6 +93,24 @@ internal static class VsWire
         return false;
     }
 
+    // Reads the length varint that opens a length-delimited field and checks it against the bytes
+    // actually left in the buffer, handing back a length the caller can slice or advance by.
+    //
+    // The comparison happens in ulong on purpose. Narrowing first and comparing afterwards turns a
+    // length with bit 31 set into a negative int, which reads as comfortably in bounds and leaves
+    // the slice or the advance that follows to throw on a frame the parser should simply have
+    // refused. Past the check the value is known to fit in what remains of the buffer, so it fits
+    // in an int and the cast on the way out cannot lose anything.
+    public static bool TryReadLength(ReadOnlySpan<byte> buf, ref int pos, out int len)
+    {
+        len = 0;
+        if (!TryReadVarint(buf, ref pos, out ulong raw)) return false;
+        // TryReadVarint leaves pos between 0 and buf.Length, so the subtraction is non-negative.
+        if (raw > (ulong)(buf.Length - pos)) return false;
+        len = (int)raw;
+        return true;
+    }
+
     // Advances past the value of a field whose key was just read. False on truncated input or
     // wire types the proxy never needs (groups).
     public static bool SkipField(ReadOnlySpan<byte> buf, ref int pos, int wireType)
@@ -106,9 +124,8 @@ internal static class VsWire
                 pos += 8;
                 return true;
             case 2: // length-delimited
-                if (!TryReadVarint(buf, ref pos, out ulong len)) return false;
-                if (pos + (int)len > buf.Length) return false;
-                pos += (int)len;
+                if (!TryReadLength(buf, ref pos, out int len)) return false;
+                pos += len;
                 return true;
             case 5: // 32-bit
                 if (pos + 4 > buf.Length) return false;
@@ -132,9 +149,8 @@ internal static class VsWire
             int wireType = (int)(key & 0x7);
             if (field == fieldNumber && wireType == 2)
             {
-                if (!TryReadVarint(body, ref pos, out ulong len)) return false;
-                if (pos + (int)len > body.Length) return false;
-                nested = body.Slice(pos, (int)len);
+                if (!TryReadLength(body, ref pos, out int len)) return false;
+                nested = body.Slice(pos, len);
                 return true;
             }
             if (!SkipField(body, ref pos, wireType)) return false;

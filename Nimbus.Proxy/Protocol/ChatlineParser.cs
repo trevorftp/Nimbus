@@ -61,10 +61,9 @@ internal static class ChatlineParser
 
             if (fieldNum == MessageField && wireType == 2)
             {
-                if (!VsWire.TryReadVarint(body, ref pos, out ulong len)) return false;
-                if (pos + (int)len > body.Length) return false;
-                message = Encoding.UTF8.GetString(body.Slice(pos, (int)len));
-                pos += (int)len;
+                if (!VsWire.TryReadLength(body, ref pos, out int len)) return false;
+                message = Encoding.UTF8.GetString(body.Slice(pos, len));
+                pos += len;
                 sawMessage = true;
                 continue;
             }

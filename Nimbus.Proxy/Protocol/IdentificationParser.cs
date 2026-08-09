@@ -52,10 +52,9 @@ internal static class IdentificationParser
             int wireType = (int)(key & 0x7);
             if (wireType == 2 && (fieldNum == 2 || fieldNum == 6))
             {
-                if (!VsWire.TryReadVarint(body, ref pos, out ulong len)) return false;
-                if (pos + (int)len > body.Length) return false;
-                string val = Encoding.UTF8.GetString(body.Slice(pos, (int)len));
-                pos += (int)len;
+                if (!VsWire.TryReadLength(body, ref pos, out int len)) return false;
+                string val = Encoding.UTF8.GetString(body.Slice(pos, len));
+                pos += len;
                 if (fieldNum == 2) playerName = val;
                 else playerUid = val;
                 if (playerName.Length > 0 && playerUid.Length > 0) return true;
