@@ -415,7 +415,182 @@ public class WhitelistEnforcementTests
         Assert.Equal(0, hub.Connections);
     }
 
+    // ---- pending entries (#104) ----
+
+    [Fact]
+    public async Task APendingEntry_AdmitsAMatchingNameAndBindsItToTheUid()
+    {
+        using var creative = new RecordingBackend();
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(20));
+
+        var cfg = Config(("creative", creative));
+        cfg.Whitelist.Servers = new() { "creative" };
+        // Listed by name alone, for a player who has never connected: no uid to key on.
+        var registry = new FakeRegistryClient
+        {
+            Whitelist = new List<WhitelistEntry> { new() { PlayerName = "builder", ServerId = "creative" } },
+        };
+        var whitelist = await CacheFrom(registry, cts.Token);
+
+        using var live = await StartAsync(cfg, new StickyRouteTable(), whitelist, cts.Token, registry: registry);
+        await live.SendAsync(ClientFrames.Identification("uid-builder", "builder"), cts.Token);
+
+        // The authenticated name matched the pending entry, so the player came straight through.
+        await WaitFor(() => creative.Sent("uid-builder"), cts.Token);
+        Assert.Equal(1, creative.Connections);
+
+        // And the gate reached back to settle the entry onto the uid it turned out to carry, so the
+        // next join matches by uid directly. The bind carries exactly the name, uid and scope.
+        await WaitFor(() => registry.BindsSoFar().Count > 0, cts.Token);
+        var bind = Assert.Single(registry.BindsSoFar());
+        Assert.Equal("builder", bind.PlayerName);
+        Assert.Equal("uid-builder", bind.PlayerUid);
+        Assert.Equal("creative", bind.ServerId);
+    }
+
+    [Fact]
+    public async Task APendingEntryForOneName_DoesNotAdmitAnother()
+    {
+        using var creative = new RecordingBackend();
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(20));
+
+        var cfg = Config(("creative", creative));
+        cfg.Whitelist.Servers = new() { "creative" };
+        var registry = new FakeRegistryClient
+        {
+            Whitelist = new List<WhitelistEntry> { new() { PlayerName = "builder", ServerId = "creative" } },
+        };
+        var whitelist = await CacheFrom(registry, cts.Token);
+
+        using var live = await StartAsync(cfg, new StickyRouteTable(), whitelist, cts.Token, registry: registry);
+        // A different authenticated name: the pending entry for "builder" says nothing about them.
+        await live.SendAsync(ClientFrames.Identification("uid-stranger", "stranger"), cts.Token);
+
+        var back = Encoding.UTF8.GetString(await live.ReadClientBytesAsync(2000, cts.Token));
+        Assert.Contains("This server is whitelisted.", back);
+        Assert.Equal(0, creative.Connections);
+        Assert.Empty(registry.BindsSoFar());
+    }
+
+    [Fact]
+    public async Task APendingEntryScopedToOneBackend_DoesNotCoverAnother()
+    {
+        using var creative = new RecordingBackend();
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(20));
+
+        var cfg = Config(("creative", creative));
+        cfg.Whitelist.Servers = new() { "creative" };
+        // Pending on staff, landing on creative: a scope covers its own backend and no other,
+        // pending or bound.
+        var registry = new FakeRegistryClient
+        {
+            Whitelist = new List<WhitelistEntry> { new() { PlayerName = "builder", ServerId = "staff" } },
+        };
+        var whitelist = await CacheFrom(registry, cts.Token);
+
+        using var live = await StartAsync(cfg, new StickyRouteTable(), whitelist, cts.Token, registry: registry);
+        await live.SendAsync(ClientFrames.Identification("uid-builder", "builder"), cts.Token);
+
+        var back = Encoding.UTF8.GetString(await live.ReadClientBytesAsync(2000, cts.Token));
+        Assert.Contains("This server is whitelisted.", back);
+        Assert.Equal(0, creative.Connections);
+        Assert.Empty(registry.BindsSoFar());
+    }
+
+    [Fact]
+    public async Task APendingEntryWhoseBindFails_StillAdmitsAndStaysPending()
+    {
+        using var creative = new RecordingBackend();
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(20));
+
+        var cfg = Config(("creative", creative));
+        cfg.Whitelist.Servers = new() { "creative" };
+        var registry = new FakeRegistryClient
+        {
+            Whitelist = new List<WhitelistEntry> { new() { PlayerName = "builder", ServerId = "creative" } },
+            // The registry is unreachable at the moment of the bind: it answers false rather than
+            // settling the entry.
+            FailBind = true,
+        };
+        var whitelist = await CacheFrom(registry, cts.Token);
+
+        using var live = await StartAsync(cfg, new StickyRouteTable(), whitelist, cts.Token, registry: registry);
+        await live.SendAsync(ClientFrames.Identification("uid-builder", "builder"), cts.Token);
+
+        // The player is admitted on the name match regardless: the bind is best-effort and does not
+        // gate the join.
+        await WaitFor(() => creative.Sent("uid-builder"), cts.Token);
+        Assert.Equal(1, creative.Connections);
+        // The bind was attempted and came back false, so the entry is left pending for next time.
+        await WaitFor(() => registry.BindsSoFar().Count > 0, cts.Token);
+        Assert.NotNull(whitelist.FindPending("builder", "creative"));
+    }
+
+    [Fact]
+    public async Task APendingEntryWhoseBindThrows_StillAdmitsWithoutTakingTheJoinDown()
+    {
+        using var creative = new RecordingBackend();
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(20));
+
+        var cfg = Config(("creative", creative));
+        cfg.Whitelist.Servers = new() { "creative" };
+        var registry = new FakeRegistryClient
+        {
+            Whitelist = new List<WhitelistEntry> { new() { PlayerName = "builder", ServerId = "creative" } },
+            // The bind call throws outright, which the gate must swallow: firing it off the join
+            // means an exception there cannot be allowed to reach the pump.
+            ThrowBind = true,
+        };
+        var whitelist = await CacheFrom(registry, cts.Token);
+
+        using var live = await StartAsync(cfg, new StickyRouteTable(), whitelist, cts.Token, registry: registry);
+        await live.SendAsync(ClientFrames.Identification("uid-builder", "builder"), cts.Token);
+
+        await WaitFor(() => creative.Sent("uid-builder"), cts.Token);
+        Assert.Equal(1, creative.Connections);
+    }
+
+    [Fact]
+    public async Task ATransferToABackendWhereThePlayerIsOnlyPending_GoesAheadAndBinds()
+    {
+        using var hub = new RecordingBackend();
+        using var creative = new RecordingBackend();
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(25));
+
+        var cfg = Config(("hub", hub), ("creative", creative));
+        cfg.Whitelist.Servers = new() { "creative" };
+        var stickies = new StickyRouteTable();
+        // Admitted to the open hub, but on creative they hold only a name-only entry. Entering
+        // creative is exactly what that entry is for, so the transfer gate honours it and binds.
+        var registry = new FakeRegistryClient
+        {
+            Whitelist = new List<WhitelistEntry> { new() { PlayerName = "builder", ServerId = "creative" } },
+        };
+        var whitelist = await CacheFrom(registry, cts.Token);
+
+        using var live = await StartAsync(cfg, stickies, whitelist, cts.Token, registry: registry);
+        await live.SendAsync(ClientFrames.Identification("uid-builder", "builder"), cts.Token);
+        await WaitFor(() => hub.Sent("uid-builder"), cts.Token);
+
+        var ok = await live.Session.RequestRedirectAsync(creative.Endpoint("creative"), registry: null,
+            reason: "admin swap", failOnRegistryError: false);
+
+        Assert.Null(ok);
+        var staged = Assert.Single(stickies.Snapshot());
+        Assert.Equal(creative.Port, staged.Target.Port);
+        await WaitFor(() => registry.BindsSoFar().Count > 0, cts.Token);
+        Assert.Equal("uid-builder", Assert.Single(registry.BindsSoFar()).PlayerUid);
+    }
+
     // ---- harness ----
+
+    private static async Task<WhitelistCache> CacheFrom(FakeRegistryClient registry, CancellationToken ct)
+    {
+        var cache = new WhitelistCache(registry, ct);
+        await cache.RefreshAsync();
+        Assert.True(cache.HasSynced);
+        return cache;
+    }
 
     private static ProxyConfig Config(params (string Name, RecordingBackend Backend)[] servers)
     {
@@ -495,7 +670,7 @@ public class WhitelistEnforcementTests
     }
 
     private static async Task<Live> StartAsync(ProxyConfig cfg, StickyRouteTable stickies, WhitelistCache whitelist,
-        CancellationToken ct, BanCache? bans = null)
+        CancellationToken ct, BanCache? bans = null, IRegistryClient? registry = null)
     {
         var front = new TcpListener(IPAddress.Loopback, 0);
         front.Start();
@@ -512,7 +687,7 @@ public class WhitelistEnforcementTests
         var serverSide = await accepted;
 
         var session = new ProxySession(1, cfg, serverSide, ct,
-            new SessionServices(Stickies: stickies, Events: events, Bans: bans, Whitelist: whitelist));
+            new SessionServices(Stickies: stickies, Registry: registry, Events: events, Bans: bans, Whitelist: whitelist));
         return new Live(front, player, session, runner.RunAsync(session, serverSide));
     }
 

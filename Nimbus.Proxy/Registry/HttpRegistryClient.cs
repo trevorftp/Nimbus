@@ -286,6 +286,27 @@ internal sealed class HttpRegistryClient : IRegistryClient, IDisposable
         }
     }
 
+    public async Task<bool> BindWhitelistAsync(string playerName, string playerUid, string? serverId, CancellationToken ct)
+    {
+        try
+        {
+            byte[] body = JsonSerializer.SerializeToUtf8Bytes(
+                new WhitelistBindRequest { PlayerName = playerName, PlayerUid = playerUid, ServerId = serverId ?? "" });
+            const string path = "/api/whitelist/bind";
+            using var msg = SignedPost(path, body);
+
+            using var resp = await http.SendAsync(msg, ct).ConfigureAwait(false);
+            return resp.IsSuccessStatusCode;
+        }
+        catch (Exception ex)
+        {
+            // The join already happened on the name match; a failed bind only means the entry
+            // stays pending and the next join tries again, so this is a warning and not a fault.
+            Log.Warn($"registry whitelist bind failed: {ex.GetType().Name}: {ex.Message}");
+            return false;
+        }
+    }
+
     // The three token-management calls are signed like every other call on this client: the
     // registry accepts HMAC and nothing else on /api/tokens, so the proxy reaches them with the
     // shared secret rather than with a token of its own. The plaintext comes back exactly once,

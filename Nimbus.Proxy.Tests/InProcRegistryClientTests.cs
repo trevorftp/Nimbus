@@ -468,13 +468,53 @@ public class InProcRegistryClientTests
     }
 
     [Fact]
-    public async Task AWhitelistRequestWithNoUid_IsRefusedRatherThanStoredAgainstNobody()
+    public async Task AWhitelistRequestWithANameButNoUid_IsStoredPending()
     {
         var e = Embedded.Create();
 
-        Assert.Null(await e.Client.AddWhitelistAsync(new WhitelistRequest { PlayerName = "builder" }, Ct));
+        // A name with no uid is a pending entry now (#104), not a refusal: the operator is listing
+        // somebody who has never connected, and the gate binds the entry to their uid on first join.
+        var entry = await e.Client.AddWhitelistAsync(new WhitelistRequest { PlayerName = "builder" }, Ct);
+        Assert.NotNull(entry);
+        Assert.True(entry!.IsPending);
+        Assert.Equal("builder", entry.PlayerName);
+        Assert.Equal("", entry.PlayerUid);
+
+        // It comes back in the listing the proxy cache reads, carrying no uid, so the uid gate can
+        // never match it by accident.
+        var listed = Assert.Single((await e.Client.GetWhitelistAsync(Ct))!);
+        Assert.True(listed.IsPending);
+        Assert.Null(e.Whitelist.FindCovering("", null));
+    }
+
+    [Fact]
+    public async Task AWhitelistRequestNamingNobody_IsRefusedRatherThanStored()
+    {
+        var e = Embedded.Create();
+
+        // Neither a uid nor a name is a request against nobody, and it is still refused: an entry
+        // keyed on the empty string covers nobody and cannot be matched, pending or otherwise.
+        Assert.Null(await e.Client.AddWhitelistAsync(new WhitelistRequest(), Ct));
         Assert.Null(await e.Client.AddWhitelistAsync(null!, Ct));
         Assert.Empty((await e.Client.GetWhitelistAsync(Ct))!);
+    }
+
+    [Fact]
+    public async Task BindingAPendingEntry_SettlesItOntoTheUid_AndIsIdempotent()
+    {
+        var e = Embedded.Create();
+        await e.Client.AddWhitelistAsync(new WhitelistRequest { PlayerName = "bob", ServerId = "creative" }, Ct);
+        Assert.NotNull(e.Whitelist.FindPending("bob", "creative"));
+
+        // The embedded bridge runs the same store bind the HTTP endpoint does, and answers the same
+        // idempotent success: the entry becomes uid-keyed and the pending row is gone.
+        Assert.True(await e.Client.BindWhitelistAsync("bob", "uid-bob", "creative", Ct));
+        Assert.Null(e.Whitelist.FindPending("bob", "creative"));
+        Assert.NotNull(e.Whitelist.FindCovering("uid-bob", "creative"));
+
+        // Binding again, with nothing left pending, is a no-op that still answers ok.
+        Assert.True(await e.Client.BindWhitelistAsync("bob", "uid-bob", "creative", Ct));
+        Assert.Single((await e.Client.GetWhitelistAsync(Ct))!);
     }
 
     // ---- transfer intents ----

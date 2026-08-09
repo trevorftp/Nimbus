@@ -113,6 +113,15 @@ internal sealed class InProcRegistryClient : IRegistryClient
     public Task<bool> RemoveWhitelistAsync(string playerUid, string? serverId, CancellationToken ct)
         => Task.FromResult(whitelist.Remove(playerUid, serverId));
 
+    // Same idempotent bind the HTTP endpoint runs, straight onto the store. Always ok: a name that
+    // was already bound or was never pending has nothing to move, which is a no-op success and not
+    // an error, exactly as POST /api/whitelist/bind answers it.
+    public Task<bool> BindWhitelistAsync(string playerName, string playerUid, string? serverId, CancellationToken ct)
+    {
+        whitelist.Bind(playerName, playerUid, serverId ?? "");
+        return Task.FromResult(true);
+    }
+
     // Same ApiTokenService the HTTP endpoints call, so the default-90-days rule, the scope
     // vocabulary and the refusal reasons are the same object in embedded and remote mode. A
     // refusal is a null here where the endpoint answers 400, with the reason in the log: there is

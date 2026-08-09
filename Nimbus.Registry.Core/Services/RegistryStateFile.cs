@@ -142,6 +142,7 @@ public static class RegistryStateFiles
 {
     public const string BansFileName = "nimbus.bans.json";
     public const string WhitelistFileName = "nimbus.whitelist.json";
+    public const string WhitelistPendingFileName = "nimbus.whitelist.pending.json";
     public const string TokensFileName = "nimbus.tokens.json";
 
     public static RegistryStateFile<NetworkBan> Bans(string? stateDir, ILogger? log = null)
@@ -149,6 +150,12 @@ public static class RegistryStateFiles
 
     public static RegistryStateFile<WhitelistEntry> Whitelist(string? stateDir, ILogger? log = null)
         => new(Path.Combine(Resolve(stateDir), WhitelistFileName), log);
+
+    // Pending entries get their own file for the same reason bans and tokens do: a name-keyed row
+    // that has not bound yet is a different kind of state from a settled uid entry, and a corrupt
+    // pending file must not be able to take the live whitelist down with it.
+    public static RegistryStateFile<WhitelistEntry> WhitelistPending(string? stateDir, ILogger? log = null)
+        => new(Path.Combine(Resolve(stateDir), WhitelistPendingFileName), log);
 
     // Its own file for the same reason the other two have theirs: a corrupt token list must not
     // be able to take the ban list down with it. What it holds is hashes, never secrets.

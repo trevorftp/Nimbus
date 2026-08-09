@@ -359,13 +359,46 @@ public class HttpRegistryClientTests
     }
 
     [Fact]
-    public async Task AWhitelistRequestWithNoUid_IsRefusedRatherThanStored()
+    public async Task AWhitelistRequestWithANameButNoUid_IsStoredPendingOverTheWire()
     {
         await using var registry = await Registry.StartAsync();
         using var client = ClientFor(registry);
 
-        Assert.Null(await client.AddWhitelistAsync(new WhitelistRequest { PlayerName = "builder" }, Ct));
+        // The signed round trip carries a name-only add through as a pending entry (#104): no uid,
+        // matched by name at the gate, bound on first join.
+        var entry = await client.AddWhitelistAsync(new WhitelistRequest { PlayerName = "builder" }, Ct);
+        Assert.NotNull(entry);
+        Assert.True(entry!.IsPending);
+        var listed = Assert.Single((await client.GetWhitelistAsync(Ct))!);
+        Assert.True(listed.IsPending);
+    }
+
+    [Fact]
+    public async Task AWhitelistRequestNamingNobody_IsRefusedRatherThanStored()
+    {
+        await using var registry = await Registry.StartAsync();
+        using var client = ClientFor(registry);
+
+        Assert.Null(await client.AddWhitelistAsync(new WhitelistRequest(), Ct));
         Assert.Empty((await client.GetWhitelistAsync(Ct))!);
+    }
+
+    [Fact]
+    public async Task BindingAPendingEntry_TravelsSignedAndSettlesTheEntry()
+    {
+        await using var registry = await Registry.StartAsync();
+        using var client = ClientFor(registry);
+        await client.AddWhitelistAsync(new WhitelistRequest { PlayerName = "ghost", ServerId = "creative" }, Ct);
+
+        // The signed bind reaches the endpoint and rewrites the entry to key on the uid, so the
+        // listing comes back with a settled, non-pending row.
+        Assert.True(await client.BindWhitelistAsync("ghost", "uid-ghost", "creative", Ct));
+        var bound = Assert.Single((await client.GetWhitelistAsync(Ct))!);
+        Assert.False(bound.IsPending);
+        Assert.Equal("uid-ghost", bound.PlayerUid);
+
+        // Idempotent over the wire too: binding again is still a 200 the client reads as true.
+        Assert.True(await client.BindWhitelistAsync("ghost", "uid-ghost", "creative", Ct));
     }
 
     // ---- transfer intents ----

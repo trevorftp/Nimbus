@@ -29,7 +29,8 @@ public static class RegistryHosting
         builder.Services.AddSingleton(sp => new BanStore(sp.GetRequiredService<TimeProvider>(),
             RegistryStateFiles.Bans(cfg.StateDir, StateLogger(sp))));
         builder.Services.AddSingleton(sp => new WhitelistStore(sp.GetRequiredService<TimeProvider>(),
-            RegistryStateFiles.Whitelist(cfg.StateDir, StateLogger(sp))));
+            RegistryStateFiles.Whitelist(cfg.StateDir, StateLogger(sp)),
+            RegistryStateFiles.WhitelistPending(cfg.StateDir, StateLogger(sp))));
         // Third: the issued scoped credentials. A token that died with the registry process would
         // be unusable, and a revocation that died with it would be worse.
         builder.Services.AddSingleton(sp => new ApiTokenStore(sp.GetRequiredService<TimeProvider>(),

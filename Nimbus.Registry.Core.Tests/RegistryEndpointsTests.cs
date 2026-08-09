@@ -650,14 +650,75 @@ public class RegistryEndpointsTests
     }
 
     [Fact]
-    public async Task WhitelistEntry_WithoutAPlayerUid_Is400()
+    public async Task WhitelistEntry_WithoutAPlayerUidOrName_Is400()
     {
         await using var host = await Host.StartAsync();
 
+        // Neither a uid nor a name names anybody, so there is nothing to store and nothing to match.
         var resp = await host.Client.SendAsync(Signed(HttpMethod.Post, host.BaseUrl, "/api/whitelist",
-            body: new { Note = "no uid" }));
+            body: new { Note = "no subject" }));
 
         Assert.Equal(HttpStatusCode.BadRequest, resp.StatusCode);
+    }
+
+    [Fact]
+    public async Task WhitelistEntry_WithANameButNoUid_IsStoredPending()
+    {
+        await using var host = await Host.StartAsync();
+
+        var added = await host.Client.SendAsync(Signed(HttpMethod.Post, host.BaseUrl, "/api/whitelist",
+            body: new { PlayerName = "ghost", Note = "event invite" }));
+        Assert.Equal(HttpStatusCode.OK, added.StatusCode);
+        var entry = await added.Content.ReadFromJsonAsync<WhitelistResponse>();
+        Assert.True(entry!.Ok);
+        Assert.True(entry.Entry!.IsPending);
+        Assert.Equal("ghost", entry.Entry.PlayerName);
+        Assert.Equal("", entry.Entry.PlayerUid);
+
+        // It shows up in the listing the proxy cache reads, still pending.
+        var listed = await host.Client.SendAsync(Signed(HttpMethod.Get, host.BaseUrl, "/api/whitelist"));
+        var pending = Assert.Single((await listed.Content.ReadFromJsonAsync<WhitelistListResponse>())!.Entries);
+        Assert.True(pending.IsPending);
+    }
+
+    [Fact]
+    public async Task PendingEntry_IsBoundToItsUid_AndBindIsIdempotent()
+    {
+        await using var host = await Host.StartAsync();
+        await host.Client.SendAsync(Signed(HttpMethod.Post, host.BaseUrl, "/api/whitelist",
+            body: new { PlayerName = "ghost", ServerId = "creative" }));
+
+        var bind = await host.Client.SendAsync(Signed(HttpMethod.Post, host.BaseUrl, "/api/whitelist/bind",
+            body: new { PlayerName = "ghost", PlayerUid = "uid-ghost", ServerId = "creative" }));
+        Assert.Equal(HttpStatusCode.OK, bind.StatusCode);
+
+        // After the bind the entry is uid-keyed: it lists with the uid and no longer reads pending.
+        var listed = await host.Client.SendAsync(Signed(HttpMethod.Get, host.BaseUrl, "/api/whitelist"));
+        var bound = Assert.Single((await listed.Content.ReadFromJsonAsync<WhitelistListResponse>())!.Entries);
+        Assert.False(bound.IsPending);
+        Assert.Equal("uid-ghost", bound.PlayerUid);
+
+        // Binding again, now that nothing is pending, is a no-op that still answers ok: the proxy
+        // fires this best-effort off a join and must never be handed an error for the race.
+        var again = await host.Client.SendAsync(Signed(HttpMethod.Post, host.BaseUrl, "/api/whitelist/bind",
+            body: new { PlayerName = "ghost", PlayerUid = "uid-ghost", ServerId = "creative" }));
+        Assert.Equal(HttpStatusCode.OK, again.StatusCode);
+        var stillListed = await host.Client.SendAsync(Signed(HttpMethod.Get, host.BaseUrl, "/api/whitelist"));
+        Assert.Single((await stillListed.Content.ReadFromJsonAsync<WhitelistListResponse>())!.Entries);
+    }
+
+    [Fact]
+    public async Task WhitelistBind_WithoutBothNameAndUid_Is400()
+    {
+        await using var host = await Host.StartAsync();
+
+        var noUid = await host.Client.SendAsync(Signed(HttpMethod.Post, host.BaseUrl, "/api/whitelist/bind",
+            body: new { PlayerName = "ghost" }));
+        Assert.Equal(HttpStatusCode.BadRequest, noUid.StatusCode);
+
+        var noName = await host.Client.SendAsync(Signed(HttpMethod.Post, host.BaseUrl, "/api/whitelist/bind",
+            body: new { PlayerUid = "uid-ghost" }));
+        Assert.Equal(HttpStatusCode.BadRequest, noName.StatusCode);
     }
 
     [Fact]

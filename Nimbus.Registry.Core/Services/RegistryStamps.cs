@@ -30,13 +30,20 @@ public static class RegistryStamps
         };
     }
 
-    // Same contract as NewBan, read the other way round.
+    // Same contract as NewBan, read the other way round, with one addition the ban side has no use
+    // for: a request that names a player by name alone, with no uid, is a pending entry (#104). It
+    // is stamped exactly like a normal one but keeps the empty uid, which is what WhitelistEntry
+    // reads as pending and what routes it to the name-keyed list. Only a request that names nobody
+    // at all, neither uid nor name, is refused.
     public static WhitelistEntry? NewWhitelistEntry(WhitelistRequest? req, long nowUnix)
     {
-        if (req is null || string.IsNullOrEmpty(req.PlayerUid)) return null;
+        if (req is null) return null;
+        bool hasUid = !string.IsNullOrEmpty(req.PlayerUid);
+        bool hasName = !string.IsNullOrEmpty(req.PlayerName);
+        if (!hasUid && !hasName) return null;
         return new WhitelistEntry
         {
-            PlayerUid = req.PlayerUid,
+            PlayerUid = req.PlayerUid ?? "",
             PlayerName = req.PlayerName ?? "",
             ServerId = req.ServerId ?? "",
             Note = req.Note ?? "",

@@ -65,6 +65,25 @@ internal sealed class RegistryEntryCache<TEntry> where TEntry : class, IScopedEn
         return null;
     }
 
+    // The first active entry the predicate accepts, or null. The uid path above is a closed lookup
+    // that every list shares; this is the seam a specific list uses for a match its own entry type
+    // knows how to make and IScopedEntry does not, which today is only the whitelist's pending
+    // lookup by name. Only called on a uid-coverage miss, never on the settled path, so the closure
+    // it takes is off the hot lane.
+    public TEntry? FindFirst(Func<TEntry, bool> predicate)
+    {
+        var snapshot = entries;
+        if (snapshot.Length == 0) return null;
+
+        long now = clock.GetUtcNow().ToUnixTimeSeconds();
+        foreach (var entry in snapshot)
+        {
+            if (!entry.IsActiveAt(now)) continue;
+            if (predicate(entry)) return entry;
+        }
+        return null;
+    }
+
     // True when the registry answered and this list is now its answer. False means the list below
     // is whatever it was before, which matters to callers that just changed the registry and are
     // about to act on the result: see WhitelistRemoveCommand.

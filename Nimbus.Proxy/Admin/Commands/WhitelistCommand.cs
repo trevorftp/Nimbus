@@ -30,10 +30,13 @@ internal sealed class WhitelistAddCommand : IAdminCommand
             if (string.IsNullOrEmpty(name))
                 return AdminCommandError.Usage(this, "need either uid or player");
 
+            // A live player resolves to their uid immediately, exactly as before. An offline one
+            // no longer fails: the entry is stored pending on the name alone (#104), and the gate
+            // binds it to their uid the first time they connect. The uid stays empty here, which is
+            // what routes the entry to the pending list.
             online = WhitelistLookup.ByName(ctx, name);
-            if (online?.PlayerUid == null)
-                return new { ok = false, reason = $"no live session for player '{name}'; whitelist by uid instead" };
-            uid = online.PlayerUid;
+            if (online?.PlayerUid != null)
+                uid = online.PlayerUid;
         }
         else
         {
@@ -77,6 +80,11 @@ internal sealed class WhitelistAddCommand : IAdminCommand
             uid = entry.PlayerUid,
             player = entry.PlayerName,
             scope = entry.IsNetworkWide ? "network" : entry.ServerId,
+            // Which of the two things happened. A pending entry was stored on the name because the
+            // player is not connected; it binds to their uid on first join. A bound entry is the
+            // ordinary uid-keyed one, either because a uid was given or because the player is live.
+            pending = entry.IsPending,
+            status = entry.IsPending ? "pending" : "bound",
             expiresAtUnix = entry.ExpiresAtUnix,
             enforcing = ctx.Cfg.Whitelist.Enabled,
         };

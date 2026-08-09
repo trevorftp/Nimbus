@@ -392,7 +392,64 @@ internal sealed partial class ProxySession : IPlayer
             return cfg.Whitelist.FailOpenUntilFirstSync ? null : scope;
         }
 
-        return whitelist.FindCovering(capturedPlayerUid, serverId) != null ? null : scope;
+        if (whitelist.FindCovering(capturedPlayerUid, serverId) != null) return null;
+
+        // A uid-coverage miss is not the end of it while pending entries exist. An operator can
+        // list a player who has never connected by name alone (#104); that entry has no uid and so
+        // is matched here, against the authenticated name from the Identification frame this gate
+        // just parsed. On a match the player comes in and the entry is bound to their uid in the
+        // background, so the next join matches by uid with no pending path at all.
+        if (TryAdmitViaPending(serverId)) return null;
+
+        return scope;
+    }
+
+    // Whether a pending entry covers this landing for the player at the door, admitting them and
+    // firing the bind if so. The name and uid both come from the validated Identification frame, so
+    // a name match here admits exactly the one authenticated account carrying that name, which is
+    // what makes matching by name at the door sound. Returns false when there is no pending entry,
+    // when the cache is absent, or when the identity is not fully captured, in which case the gate
+    // falls through to its ordinary refusal.
+    private bool TryAdmitViaPending(string? serverId)
+    {
+        if (whitelist == null) return false;
+        string? name = capturedPlayerName;
+        string? uid = capturedPlayerUid;
+        if (string.IsNullOrEmpty(name) || string.IsNullOrEmpty(uid)) return false;
+        if (whitelist.FindPending(name, serverId) == null) return false;
+
+        FirePendingBind(name, uid, serverId);
+        return true;
+    }
+
+    // Settle a matched pending entry onto its uid, off the join. Fire and forget on purpose: the
+    // player is already admitted on the authenticated name match, and the bind only fills the uid
+    // in so the next join matches directly, so it must never block or fail the join it followed. A
+    // registry that is unreachable at this moment leaves the entry pending and the next join tries
+    // again; every outcome is logged with the name and uid.
+    private void FirePendingBind(string name, string uid, string? serverId)
+    {
+        var reg = registry;
+        if (reg == null) return;
+
+        string scope = string.IsNullOrEmpty(serverId) ? "the network" : serverId;
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                bool bound = await reg.BindWhitelistAsync(name, uid, serverId ?? "", sessionStopToken).ConfigureAwait(false);
+                if (bound)
+                    Log.Info($"[s{Id}] bound pending whitelist entry for {name} to uid {uid} on {scope}");
+                else
+                    Log.Warn($"[s{Id}] could not bind pending whitelist entry for {name} (uid {uid}) on {scope}; " +
+                             "it stays pending and the next join will try again");
+            }
+            catch (Exception ex)
+            {
+                Log.Warn($"[s{Id}] pending whitelist bind for {name} (uid {uid}) on {scope} threw " +
+                         $"{ex.GetType().Name}: {ex.Message}; it stays pending and the next join will try again");
+            }
+        }, sessionStopToken);
     }
 
     // Once per process, not once per connection: a network locked out by an unreachable registry
@@ -479,6 +536,12 @@ internal sealed partial class ProxySession : IPlayer
         }
 
         if (whitelist.FindCovering(capturedPlayerUid, target.ServerId) != null) return null;
+
+        // Same pending reading as the connection gate: a player admitted to an open backend can
+        // still be moving to one where they hold only a name-only entry, and entering that backend
+        // is exactly what the entry is for, so a pending match covers the transfer and binds too.
+        if (TryAdmitViaPending(target.ServerId)) return null;
+
         return $"player is not whitelisted on {DescribeTarget(target)}";
     }
 

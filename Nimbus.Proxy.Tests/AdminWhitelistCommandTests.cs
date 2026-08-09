@@ -72,22 +72,35 @@ public class AdminWhitelistCommandTests
         var reply = await harness.RunAsync(new { cmd = "whitelist-add", player = "builder" });
 
         Assert.True(reply.GetProperty("ok").GetBoolean());
+        // A live player resolves to their uid there and then, so the entry is bound, not pending.
+        Assert.False(reply.GetProperty("pending").GetBoolean());
+        Assert.Equal("bound", reply.GetProperty("status").GetString());
         var recorded = Assert.IsType<WhitelistRequest>(harness.Registry.LastWhitelistRequest);
         Assert.Equal(Uid, recorded.PlayerUid);
         Assert.Equal("builder", recorded.PlayerName);
     }
 
     [Fact]
-    public async Task AnAddByNameForSomebodyNotConnected_SendsTheOperatorToTheUidForm()
+    public async Task AnAddByNameForSomebodyNotConnected_StoresAPendingEntry()
     {
         await using var harness = await AdminHarness.StartAsync();
-        harness.Registry.AddWhitelistResult = Entry();
+        // The registry answers with the pending entry it stored: no uid, name kept, IsPending.
+        harness.Registry.AddWhitelistResult = new WhitelistEntry { PlayerName = "ghost" };
+        harness.Registry.Whitelist = new List<WhitelistEntry>();
 
         var reply = await harness.RunAsync(new { cmd = "whitelist-add", player = "ghost" });
 
-        Assert.False(reply.GetProperty("ok").GetBoolean());
-        Assert.Contains("no live session for player 'ghost'", reply.GetProperty("reason").GetString());
-        Assert.Null(harness.Registry.LastWhitelistRequest);
+        // No live session no longer fails the command (#104); it stores the name pending and says so.
+        Assert.True(reply.GetProperty("ok").GetBoolean());
+        Assert.True(reply.GetProperty("pending").GetBoolean());
+        Assert.Equal("pending", reply.GetProperty("status").GetString());
+        Assert.Equal("ghost", reply.GetProperty("player").GetString());
+
+        // The request the command built carried the name and no uid, which is what the registry
+        // reads as pending.
+        var recorded = Assert.IsType<WhitelistRequest>(harness.Registry.LastWhitelistRequest);
+        Assert.Equal("ghost", recorded.PlayerName);
+        Assert.Equal("", recorded.PlayerUid);
     }
 
     [Fact]

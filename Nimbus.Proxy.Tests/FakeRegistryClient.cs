@@ -33,6 +33,23 @@ internal sealed class FakeRegistryClient : IRegistryClient
     public bool RemoveWhitelistResult;
     public (string Uid, string? ServerId)? LastWhitelistRemove;
 
+    /// <summary>Every bind the gate fired, oldest first, so a test can prove the pending path both
+    /// admitted the player and reached back to settle the entry, and read the exact triple it
+    /// carried. <see cref="FailBind"/> makes the call answer false (registry unreachable at that
+    /// moment), and <see cref="ThrowBind"/> makes it throw, which is how the gate's best-effort
+    /// firing is proven not to take the join down with it.</summary>
+    public readonly List<BindCall> Binds = new();
+    public bool FailBind;
+    public bool ThrowBind;
+
+    internal sealed record BindCall(string PlayerName, string PlayerUid, string? ServerId);
+
+    /// <summary>Snapshot of <see cref="Binds"/>, safe to read while the gate is still firing.</summary>
+    public List<BindCall> BindsSoFar()
+    {
+        lock (Binds) return new List<BindCall>(Binds);
+    }
+
     /// <summary>Intents handed to the next drain, and how many drains have happened.</summary>
     public List<TransferIntent> Intents = new();
     public int Drains;
@@ -136,6 +153,13 @@ internal sealed class FakeRegistryClient : IRegistryClient
     {
         LastWhitelistRemove = (playerUid, serverId);
         return Task.FromResult(RemoveWhitelistResult);
+    }
+
+    public Task<bool> BindWhitelistAsync(string playerName, string playerUid, string? serverId, CancellationToken ct)
+    {
+        if (ThrowBind) throw new InvalidOperationException("registry down");
+        lock (Binds) Binds.Add(new BindCall(playerName, playerUid, serverId));
+        return Task.FromResult(!FailBind);
     }
 
     /// <summary>What CreateApiTokenAsync answers. Null is "the registry refused the token".</summary>

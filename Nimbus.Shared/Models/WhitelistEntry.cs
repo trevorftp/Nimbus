@@ -27,6 +27,14 @@ public sealed class WhitelistEntry : IScopedEntry
 
     public bool IsNetworkWide => string.IsNullOrEmpty(ServerId);
 
+    // A pending entry carries a name to be matched by and no uid yet: it is the row an operator
+    // adds for a player who has never connected, so there is no PlayerUid to key on. The gate
+    // matches it by the authenticated name at the door and binds it to that account's uid on the
+    // first join, after which it is an ordinary uid-keyed entry and this reads false. The empty
+    // uid is the whole of the state: nothing else needs to be stored to know an entry is pending,
+    // and a bool alongside it could only ever disagree with the uid it is meant to describe.
+    public bool IsPending => string.IsNullOrEmpty(PlayerUid) && !string.IsNullOrEmpty(PlayerName);
+
     public bool IsActiveAt(long nowUnix)
         => ExpiresAtUnix <= 0 || nowUnix < ExpiresAtUnix;
 
@@ -62,6 +70,20 @@ public sealed class WhitelistRemoveRequest
 
     // Empty removes the network-wide entry. A scoped entry must be removed with the serverId it
     // was created with.
+    public string ServerId { get; set; } = "";
+}
+
+// Body of POST /api/whitelist/bind. The proxy sends this once its gate has matched a pending
+// entry against a joining player: the name that was listed, the authenticated uid that name
+// turned out to carry, and the scope the pending entry was stored under. The registry rewrites
+// the pending row to carry the uid, so the next join for that player matches by uid directly.
+public sealed class WhitelistBindRequest
+{
+    public string PlayerName { get; set; } = "";
+    public string PlayerUid { get; set; } = "";
+
+    // Empty binds the network-wide pending entry; a scoped one must be bound with the serverId it
+    // was stored under.
     public string ServerId { get; set; } = "";
 }
 

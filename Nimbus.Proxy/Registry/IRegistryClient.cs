@@ -45,6 +45,12 @@ internal interface IRegistryClient
 
     Task<bool> RemoveWhitelistAsync(string playerUid, string? serverId, CancellationToken ct);
 
+    // Bind a pending entry to the uid its name turned out to carry. The gate fires this once it has
+    // admitted a joining player on a pending name match; it is best-effort and does not block the
+    // join, so a false return (registry unreachable) leaves the entry pending for next time rather
+    // than failing anything. Idempotent: binding an already-bound or absent name is a no-op success.
+    Task<bool> BindWhitelistAsync(string playerName, string playerUid, string? serverId, CancellationToken ct);
+
     // Scoped API tokens (#54). These are the management path only, reached from the admin socket:
     // the tokens themselves are presented to the registry by whoever holds them and never travel
     // back through here. Creating one is the single moment its plaintext exists, which is why the

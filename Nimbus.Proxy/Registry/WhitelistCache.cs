@@ -34,6 +34,19 @@ internal sealed class WhitelistCache
     public WhitelistEntry? FindCovering(string? playerUid, string? serverId = null)
         => cache.Find(playerUid, serverId);
 
+    // The pending entry listed for this name on `serverId`, or null. The gate calls this on a
+    // uid-coverage miss, using the authenticated name from the Identification frame: a pending
+    // entry has no uid to match on, so FindCovering above can never answer it and this is the only
+    // way it reaches the door. A network-wide pending entry covers whatever is asked; a scoped one
+    // only its own backend.
+    public WhitelistEntry? FindPending(string? playerName, string? serverId = null)
+    {
+        if (string.IsNullOrEmpty(playerName)) return null;
+        return cache.FindFirst(e => e.IsPending
+            && string.Equals(e.PlayerName, playerName, StringComparison.OrdinalIgnoreCase)
+            && e.Matches(serverId));
+    }
+
     // True when the registry answered and this list is now its answer. False means the list below
     // is whatever it was before, which matters to callers that just changed the registry and are
     // about to act on the result: see WhitelistRemoveCommand.

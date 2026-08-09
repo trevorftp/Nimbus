@@ -173,11 +173,34 @@ public static class Endpoints
             catch { return Results.BadRequest(new { error = MalformedBody }); }
 
             Attribute(ctx, req);
+            // A uid entry is stored as before. A name-only entry is stored pending (#104): it
+            // carries no uid to key on, so Add routes it to the name-keyed list, where the gate
+            // matches it by the authenticated name and binds it on first join. Only a request that
+            // names nobody at all is refused.
             var stamped = RegistryStamps.NewWhitelistEntry(req, clock.GetUtcNow().ToUnixTimeSeconds());
             if (stamped is null)
-                return Results.BadRequest(new WhitelistResponse { Ok = false, Error = PlayerUidRequired });
+                return Results.BadRequest(new WhitelistResponse { Ok = false, Error = "PlayerUid or PlayerName required" });
 
             return Results.Ok(new WhitelistResponse { Ok = true, Entry = whitelist.Add(stamped) });
+        });
+
+        // Bind a pending entry to the uid it turned out to carry. The proxy posts this once its
+        // gate has admitted a joining player on a pending name match: the entry is rewritten to key
+        // on the uid, so the player's next join matches by uid with no pending path at all.
+        // Idempotent by design (#104): binding a name that is already bound, or was never pending,
+        // is a no-op that still answers ok, because the proxy fires this best-effort off the join
+        // and must not be handed an error for a race it cannot do anything about.
+        app.MapPost("/api/whitelist/bind", async (HttpContext ctx, WhitelistStore whitelist) =>
+        {
+            WhitelistBindRequest? req;
+            try { req = await ctx.Request.ReadFromJsonAsync<WhitelistBindRequest>(); }
+            catch { return Results.BadRequest(new { error = MalformedBody }); }
+
+            if (req is null || string.IsNullOrEmpty(req.PlayerName) || string.IsNullOrEmpty(req.PlayerUid))
+                return Results.BadRequest(new WhitelistResponse { Ok = false, Error = "PlayerName and PlayerUid required" });
+
+            whitelist.Bind(req.PlayerName, req.PlayerUid, req.ServerId ?? "");
+            return Results.Ok(new WhitelistResponse { Ok = true });
         });
 
         // Drop an entry. Omit ServerId to drop the network-wide one; a scoped entry must be

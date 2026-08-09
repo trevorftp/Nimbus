@@ -138,7 +138,8 @@ internal sealed class ProxyRegistryHost : IAsyncDisposable
             Reservations = new ReservationStore(),
             Intents = new TransferIntentStore(),
             Bans = new BanStore(state: RegistryStateFiles.Bans(coreCfg.StateDir)),
-            Whitelist = new WhitelistStore(state: RegistryStateFiles.Whitelist(coreCfg.StateDir)),
+            Whitelist = new WhitelistStore(state: RegistryStateFiles.Whitelist(coreCfg.StateDir),
+                pendingState: RegistryStateFiles.WhitelistPending(coreCfg.StateDir)),
             // Tokens are worth minting in this mode even though nothing here answers a bearer
             // header: an operator preparing a bot on a proxy with no listener still needs the
             // credential, and the registry that will answer it reads the same file.
