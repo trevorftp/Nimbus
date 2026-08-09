@@ -511,8 +511,8 @@ public class WhitelistEnforcementTests
         await player.ConnectAsync(IPAddress.Loopback, frontPort, ct);
         var serverSide = await accepted;
 
-        var session = new ProxySession(1, cfg, serverSide, ct, stickies, registry: null,
-            udpOverrides: null, events: events, bans: bans, whitelist: whitelist);
+        var session = new ProxySession(1, cfg, serverSide, ct,
+            new SessionServices(Stickies: stickies, Events: events, Bans: bans, Whitelist: whitelist));
         return new Live(front, player, session, runner.RunAsync(session, serverSide));
     }
 

@@ -79,8 +79,8 @@ internal sealed class EvacuateCommand : IAdminCommand
         Log.Info($"evacuate: {onSource.Count} session(s) on {source} -> " +
                  $"{fixedTarget?.ServerId ?? "the router's choice"} at {paceMs}ms apart");
 
-        var sweep = await SweepAsync(ctx, onSource, source, fixedTarget, probes, mode,
-            req.OptionalString("reason"), paceMs).ConfigureAwait(false);
+        var plan = new EvacuationPlan(source, fixedTarget, mode, req.OptionalString("reason"));
+        var sweep = await SweepAsync(ctx, onSource, plan, probes, paceMs).ConfigureAwait(false);
 
         Log.Info($"evacuate: {source} done, {sweep.Moved} moved, {sweep.Failed} failed, {sweep.Skipped} skipped");
 
@@ -127,8 +127,16 @@ internal sealed class EvacuateCommand : IAdminCommand
 
     private sealed record Sweep(int Moved, int Failed, int Skipped, bool Completed, List<object> Entries);
 
-    private static async Task<Sweep> SweepAsync(AdminContext ctx, List<ProxySession> onSource, string source,
-        BackendEndpoint? fixedTarget, ProbeCache probes, string mode, string? reason, int paceMs)
+    // What the operator asked this evacuate to do: empty Source, send everyone to Target (or let the
+    // router choose per session when it is null), using Mode, recording Reason. The four are fixed
+    // for the whole run and were threaded verbatim through both the sweep and the per-session move,
+    // so they travel as one value the way `nimctl evacuate <source> --to ... --reason ...` reads as
+    // one instruction. Pace and the probe cache stay out: pacing is the sweep's own knob and the
+    // cache is shared mutable state, neither belongs to the operator's plan.
+    private sealed record EvacuationPlan(string Source, BackendEndpoint? Target, string Mode, string? Reason);
+
+    private static async Task<Sweep> SweepAsync(AdminContext ctx, List<ProxySession> onSource,
+        EvacuationPlan plan, ProbeCache probes, int paceMs)
     {
         var entries = new List<object>(onSource.Count);
         int moved = 0, failed = 0, skipped = 0;
@@ -165,7 +173,7 @@ internal sealed class EvacuateCommand : IAdminCommand
             }
             anyAttempted = true;
 
-            var move = await MoveSessionAsync(ctx, session, source, fixedTarget, probes, mode, reason).ConfigureAwait(false);
+            var move = await MoveSessionAsync(ctx, session, plan, probes).ConfigureAwait(false);
             entries.Add(move.Entry);
             if (move.Outcome == MoveOutcome.Moved) moved++;
             else failed++;
@@ -193,20 +201,20 @@ internal sealed class EvacuateCommand : IAdminCommand
     // elsewhere), probe it, then hand it to the same RequestTransferAsync a hand-typed swap uses. A
     // refused transfer leaves the player where they are and is reported as failed; nobody is
     // disconnected.
-    private static async Task<MoveResult> MoveSessionAsync(AdminContext ctx, ProxySession session, string source,
-        BackendEndpoint? fixedTarget, ProbeCache probes, string mode, string? reason)
+    private static async Task<MoveResult> MoveSessionAsync(AdminContext ctx, ProxySession session,
+        EvacuationPlan plan, ProbeCache probes)
     {
-        var (target, targetRefusal) = fixedTarget != null
-            ? (fixedTarget, null)
-            : await ChooseTargetAsync(ctx, source).ConfigureAwait(false);
+        var (target, targetRefusal) = plan.Target != null
+            ? (plan.Target, null)
+            : await ChooseTargetAsync(ctx, plan.Source).ConfigureAwait(false);
         if (target == null)
             return new MoveResult(MoveOutcome.Failed, Entry(session, "failed", null, null, targetRefusal ?? "no backend to move to"));
 
         if (!await probes.ReachableAsync(target).ConfigureAwait(false))
             return new MoveResult(MoveOutcome.Failed, Entry(session, "failed", target, null, $"target {target.Host}:{target.Port} unreachable (tcp probe)"));
 
-        var (modeUsed, failReason) = await session.RequestTransferAsync(target, mode, ctx.Proxy.Registry,
-            reason ?? $"evacuating {source}", ctx.Proxy.RegistryCfg.FailOnError).ConfigureAwait(false);
+        var (modeUsed, failReason) = await session.RequestTransferAsync(target, plan.Mode, ctx.Proxy.Registry,
+            plan.Reason ?? $"evacuating {plan.Source}", ctx.Proxy.RegistryCfg.FailOnError).ConfigureAwait(false);
         return failReason == null
             ? new MoveResult(MoveOutcome.Moved, Entry(session, "moved", target, modeUsed, null))
             : new MoveResult(MoveOutcome.Failed, Entry(session, "failed", target, modeUsed, failReason));

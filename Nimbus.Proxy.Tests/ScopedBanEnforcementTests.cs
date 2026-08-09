@@ -279,8 +279,8 @@ public class ScopedBanEnforcementTests
         await player.ConnectAsync(IPAddress.Loopback, frontPort, ct);
         var serverSide = await accepted;
 
-        var session = new ProxySession(1, cfg, serverSide, ct, stickies, registry: null,
-            udpOverrides: null, events: events, bans: bans);
+        var session = new ProxySession(1, cfg, serverSide, ct,
+            new SessionServices(Stickies: stickies, Events: events, Bans: bans));
         return new Live(front, player, session, runner.RunAsync(session, serverSide));
     }
 

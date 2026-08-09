@@ -80,8 +80,8 @@ internal sealed class SessionHarness : IDisposable
         await player.ConnectAsync(IPAddress.Loopback, frontPort, cts.Token);
         var serverSide = await accepted;
 
-        var session = new ProxySession(1, cfg, serverSide, cts.Token, stickies, registry: null,
-            udpOverrides: udpOverrides, events: events);
+        var session = new ProxySession(1, cfg, serverSide, cts.Token,
+            new SessionServices(Stickies: stickies, UdpOverrides: udpOverrides, Events: events));
 
         var harness = new SessionHarness(front, player, session, runner.RunAsync(session, serverSide), cts)
         {

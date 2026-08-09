@@ -263,8 +263,8 @@ public class StickyReconnectTests
         await player.ConnectAsync(IPAddress.Loopback, frontPort, ct);
         var serverSide = await accepted;
 
-        var session = new ProxySession(1, cfg, serverSide, ct, stickies, registry: null,
-            udpOverrides: null, events: events, bans: null);
+        var session = new ProxySession(1, cfg, serverSide, ct,
+            new SessionServices(Stickies: stickies, Events: events));
         return new Live(front, player, session, runner.RunAsync(session, serverSide));
     }
 

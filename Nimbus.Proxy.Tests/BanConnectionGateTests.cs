@@ -58,8 +58,8 @@ public class BanConnectionGateTests
         await player.ConnectAsync(IPAddress.Loopback, frontPort, cts.Token);
         var serverSide = await accepted;
 
-        var session = new ProxySession(1, cfg, serverSide, cts.Token, stickies, registry: null,
-            udpOverrides: null, events: events, bans: bans);
+        var session = new ProxySession(1, cfg, serverSide, cts.Token,
+            new SessionServices(Stickies: stickies, Events: events, Bans: bans));
         var running = runner.RunAsync(session, serverSide);
 
         // Stay silent past the first-frame window, then identify as the banned player.

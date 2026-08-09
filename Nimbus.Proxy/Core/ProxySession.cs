@@ -85,9 +85,11 @@ internal sealed partial class ProxySession : IPlayer
     // instead of the reason they were sent away.
     private volatile Task? gateDisconnect;
 
+    // The four transport essentials the session cannot exist without, plus the ambient services the
+    // surrounding proxy lends it (see SessionServices). Callers that supplied no services pass an
+    // all-null bundle, which lands the members exactly where omitted arguments used to.
     public ProxySession(long id, ProxyConfig cfg, TcpClient client, CancellationToken stopToken,
-        StickyRouteTable? stickies = null, IRegistryClient? registry = null, UdpRouteOverrides? udpOverrides = null,
-        EventBus? events = null, BanCache? bans = null, WhitelistCache? whitelist = null)
+        SessionServices? services = null)
     {
         Id = id;
         this.cfg = cfg;
@@ -98,12 +100,13 @@ internal sealed partial class ProxySession : IPlayer
         var clientEp = client.Client?.RemoteEndPoint as System.Net.IPEndPoint;
         this.clientAddress = clientEp?.Address;
         this.clientRemote = DescribeClient(this.clientAddress);
-        this.stickies = stickies;
-        this.registry = registry;
-        this.udpOverrides = udpOverrides;
-        this.events = events;
-        this.bans = bans;
-        this.whitelist = whitelist;
+        var svc = services ?? new SessionServices();
+        this.stickies = svc.Stickies;
+        this.registry = svc.Registry;
+        this.udpOverrides = svc.UdpOverrides;
+        this.events = svc.Events;
+        this.bans = svc.Bans;
+        this.whitelist = svc.Whitelist;
 
         // Sniffers always run on the client stream so registry-backed joins and transfers have
         // the player UID even when SniffFrames is disabled.

@@ -13,7 +13,14 @@ internal sealed class ClientSessionRunner
     private readonly BanCache? bans;
     private readonly WhitelistCache? whitelist;
 
-    public ClientSessionRunner(BackendRouter router, EventBus events, ServerStatusResponder statusResponder,
+    // Eight distinct collaborators, deliberately left as explicit parameters (S107 suppressed). They
+    // are not one concept the way ProxySession's SessionServices are: the router, the event bus, the
+    // status responder, the sticky table, the config and the stop token are unrelated subsystems, and
+    // the only pair with anything in common (the ban and whitelist caches) is two arguments, too few
+    // to earn a wrapper. SessionServices does not fit either: it carries a registry and UDP overrides
+    // this runner never takes, and lacks the router and status responder it needs. Wrapping any
+    // subset here would hide honest wiring behind a container invented only to lower a count.
+    public ClientSessionRunner(BackendRouter router, EventBus events, ServerStatusResponder statusResponder, // NOSONAR
         StickyRouteTable stickies, ProxyConfig cfg, CancellationToken stopToken, BanCache? bans = null,
         WhitelistCache? whitelist = null)
     {

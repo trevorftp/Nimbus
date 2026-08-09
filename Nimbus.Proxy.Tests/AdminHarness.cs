@@ -106,8 +106,8 @@ internal sealed class AdminHarness : IAsyncDisposable
         var serverSide = await accepted;
 
         long id = Interlocked.Increment(ref nextSessionId);
-        var session = new ProxySession(id, Cfg, serverSide, cts.Token, Proxy.Stickies, Proxy.Registry,
-            Proxy.UdpOverrides, Proxy.Events, Proxy.Bans, Proxy.Whitelist);
+        var session = new ProxySession(id, Cfg, serverSide, cts.Token,
+            new SessionServices(Proxy.Stickies, Proxy.Registry, Proxy.UdpOverrides, Proxy.Events, Proxy.Bans, Proxy.Whitelist));
         Proxy.Sessions[id] = session;
         var running = runner.RunAsync(session, serverSide);
 

@@ -84,7 +84,8 @@ internal sealed class ProxyListener
                 catch (OperationCanceledException) { break; }
 
                 long id = Interlocked.Increment(ref sessionCounter);
-                var session = new ProxySession(id, cfg, client, stopToken, Stickies, Registry, UdpOverrides, Events, Bans, Whitelist);
+                var session = new ProxySession(id, cfg, client, stopToken,
+                    new SessionServices(Stickies, Registry, UdpOverrides, Events, Bans, Whitelist));
                 Sessions[id] = session;
                 ProxyMetrics.SessionAccepted();
                 _ = Task.Run(async () =>

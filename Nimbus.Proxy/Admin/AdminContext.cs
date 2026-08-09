@@ -14,7 +14,13 @@ internal sealed class AdminContext
     public IReadOnlyList<LoadedPlugin> Plugins { get; }
     public Func<string>? Reload { get; }
 
-    public AdminContext(ProxyListener proxy, ProxyConfig cfg, JsonElement request,
+    // AdminContext is itself the parameter object: it exists to hand every command handler the eight
+    // distinct things it might read, each surfaced as its own property above. The constructor takes
+    // those eight once (S107 suppressed) and assigns them straight across. Wrapping a subset in a
+    // nested record would not remove any parameter, only push it down a level, so a handler reaching
+    // for ctx.Proxy would go through ctx.Something.Proxy for no gain. There is nothing to bundle here
+    // that this class is not already the bundle for.
+    public AdminContext(ProxyListener proxy, ProxyConfig cfg, JsonElement request, // NOSONAR
         CancellationToken stopToken, AdminPermissions permissions, IReadOnlyCollection<IAdminCommand> commands,
         IReadOnlyList<LoadedPlugin> plugins, Func<string>? reload = null)
     {
