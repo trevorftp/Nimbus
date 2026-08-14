@@ -5,7 +5,6 @@ namespace Nimbus.Proxy;
 
 internal sealed class TransferIntentDispatcher
 {
-    private static readonly TimeSpan SeamlessReadyWaitTimeout = TimeSpan.FromSeconds(75);
     private static readonly TimeSpan SeamlessReadyPollInterval = TimeSpan.FromMilliseconds(250);
 
     private readonly ProxyConfig cfg;
@@ -46,7 +45,11 @@ internal sealed class TransferIntentDispatcher
 
     private async Task DispatchAsync(TransferIntent intent)
     {
-        if (string.IsNullOrEmpty(intent.PlayerUid) || string.IsNullOrEmpty(intent.TargetServerId)) return;
+        if (string.IsNullOrEmpty(intent.PlayerUid) || string.IsNullOrEmpty(intent.TargetServerId))
+        {
+            await ReportFailureAsync(intent, "transfer intent has no player or target").ConfigureAwait(false);
+            return;
+        }
 
         var match = sessions.Values.FirstOrDefault(
             s => string.Equals(s.PlayerUid, intent.PlayerUid, StringComparison.OrdinalIgnoreCase));
@@ -54,6 +57,7 @@ internal sealed class TransferIntentDispatcher
         if (match == null)
         {
             Log.Trace($"intent {intent.Id} for uid={intent.PlayerUid} -> no live session on this proxy, dropping");
+            await ReportFailureAsync(intent, "player session is not connected to this proxy").ConfigureAwait(false);
             return;
         }
 
@@ -61,9 +65,24 @@ internal sealed class TransferIntentDispatcher
         {
             using var rcts = new CancellationTokenSource(TimeSpan.FromSeconds(cfg.Registry.HttpTimeoutSeconds + 1));
             var backend = await registry.ResolveByServerIdAsync(intent.TargetServerId, rcts.Token).ConfigureAwait(false);
-            if (backend == null) { Log.Warn($"intent {intent.Id}: unknown serverId '{intent.TargetServerId}'"); return; }
-            if (backend.Stale) { Log.Warn($"intent {intent.Id}: target '{intent.TargetServerId}' is stale"); return; }
-            if (backend.Maintenance) { Log.Warn($"intent {intent.Id}: target '{intent.TargetServerId}' is in maintenance"); return; }
+            if (backend == null)
+            {
+                Log.Warn($"intent {intent.Id}: unknown serverId '{intent.TargetServerId}'");
+                await ReportFailureAsync(intent, "target backend is unavailable").ConfigureAwait(false);
+                return;
+            }
+            if (backend.Stale)
+            {
+                Log.Warn($"intent {intent.Id}: target '{intent.TargetServerId}' is stale");
+                await ReportFailureAsync(intent, "target backend is stale").ConfigureAwait(false);
+                return;
+            }
+            if (backend.Maintenance)
+            {
+                Log.Warn($"intent {intent.Id}: target '{intent.TargetServerId}' is in maintenance");
+                await ReportFailureAsync(intent, "target backend is in maintenance").ConfigureAwait(false);
+                return;
+            }
 
             var target = new BackendEndpoint { Host = backend.PublicHost, Port = backend.PublicPort, ServerId = intent.TargetServerId };
             bool seamless = string.Equals(intent.Mode, "seamless", StringComparison.OrdinalIgnoreCase)
@@ -78,6 +97,7 @@ internal sealed class TransferIntentDispatcher
                 if (!ready)
                 {
                     Log.Warn($"intent {intent.Id} dispatch failed: seamless timed out waiting for session ready (phase={match.Phase})");
+                    await ReportFailureAsync(intent, "proxy timed out waiting for the player session").ConfigureAwait(false);
                     return;
                 }
                 Log.Info($"intent {intent.Id} ready gate passed (phase={match.Phase})");
@@ -88,13 +108,46 @@ internal sealed class TransferIntentDispatcher
                 intent.ClientTransferId).ConfigureAwait(false);
 
             if (result.failReason != null)
+            {
                 Log.Warn($"intent {intent.Id} dispatch failed: {result.failReason}");
+                await ReportFailureAsync(intent, result.failReason).ConfigureAwait(false);
+            }
             else
                 Log.Info($"intent {intent.Id} dispatched: {intent.PlayerName}({intent.PlayerUid}) -> {intent.TargetServerId} via {result.modeUsed}");
         }
         catch (Exception ex)
         {
             Log.Warn($"intent {intent.Id} dispatch error: {ex.GetType().Name}: {ex.Message}");
+            await ReportFailureAsync(intent, "proxy failed to dispatch the transfer").ConfigureAwait(false);
+        }
+    }
+
+    private async Task ReportFailureAsync(TransferIntent intent, string reason)
+    {
+        bool seamless = string.Equals(intent.Mode, "seamless", StringComparison.OrdinalIgnoreCase)
+                     || string.Equals(intent.Mode, "splice", StringComparison.OrdinalIgnoreCase);
+        if (!seamless || string.IsNullOrWhiteSpace(intent.ClientTransferId)
+            || string.IsNullOrWhiteSpace(intent.SourceServerId))
+            return;
+
+        var failure = new TransferFailed
+        {
+            ClientTransferId = intent.ClientTransferId,
+            SourceServerId = intent.SourceServerId,
+            Reason = string.IsNullOrWhiteSpace(reason) ? "seamless transfer failed" : reason,
+            FailedAtUnix = DateTimeOffset.UtcNow.ToUnixTimeSeconds(),
+        };
+
+        try
+        {
+            using var cts = CancellationTokenSource.CreateLinkedTokenSource(stopToken);
+            cts.CancelAfter(TimeSpan.FromSeconds(Math.Max(1, cfg.Registry.HttpTimeoutSeconds + 1)));
+            if (!await registry.ReportTransferFailureAsync(failure, cts.Token).ConfigureAwait(false))
+                Log.Warn($"intent {intent.Id}: registry rejected the seamless failure notice");
+        }
+        catch (Exception ex)
+        {
+            Log.Warn($"intent {intent.Id}: could not report seamless failure: {ex.GetType().Name}: {ex.Message}");
         }
     }
 
@@ -103,7 +156,8 @@ internal sealed class TransferIntentDispatcher
         if (session.Phase == SessionState.Phase.Ready)
             return true;
 
-        using var timeoutCts = new CancellationTokenSource(SeamlessReadyWaitTimeout);
+        using var timeoutCts = new CancellationTokenSource(
+            TimeSpan.FromSeconds(Math.Max(1, cfg.Registry.SeamlessReadyWaitTimeoutSeconds)));
         using var linked = CancellationTokenSource.CreateLinkedTokenSource(stopToken, timeoutCts.Token);
 
         while (!linked.IsCancellationRequested)

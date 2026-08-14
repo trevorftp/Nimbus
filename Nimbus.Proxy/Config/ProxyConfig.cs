@@ -215,6 +215,11 @@ internal sealed class RegistryConfig
     public bool FailOnError { get; set; } = true;
     public int TransferIntentPollMs { get; set; } = 1000;
 
+    // The maximum time the dispatcher waits for a source session to become ready.
+    // Standalone registries must use the same value so heartbeat responses can give
+    // backends an accurate client-side expiry budget.
+    public int SeamlessReadyWaitTimeoutSeconds { get; set; } = 75;
+
     // Remote mode only.
     public string Url { get; set; } = "";
     public string SharedSecret { get; set; } = "";

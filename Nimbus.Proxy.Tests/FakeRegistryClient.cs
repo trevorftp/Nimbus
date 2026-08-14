@@ -37,6 +37,9 @@ internal sealed class FakeRegistryClient : IRegistryClient
     public List<TransferIntent> Intents = new();
     public int Drains;
 
+    public readonly List<TransferFailed> FailureReports = new();
+    public bool FailFailureReport { get; set; }
+
     /// <summary>Backends ResolveByServerIdAsync knows about, keyed by serverId.</summary>
     public Dictionary<string, BackendSnapshot> Backends = new(StringComparer.OrdinalIgnoreCase);
 
@@ -96,6 +99,17 @@ internal sealed class FakeRegistryClient : IRegistryClient
         var drained = Intents;
         Intents = new List<TransferIntent>();
         return Task.FromResult(drained);
+    }
+
+    public Task<bool> ReportTransferFailureAsync(TransferFailed failure, CancellationToken ct)
+    {
+        lock (FailureReports) FailureReports.Add(failure);
+        return Task.FromResult(!FailFailureReport);
+    }
+
+    public List<TransferFailed> FailureReportsSoFar()
+    {
+        lock (FailureReports) return new List<TransferFailed>(FailureReports);
     }
 
     public Task<List<NetworkBan>?> GetBansAsync(CancellationToken ct)

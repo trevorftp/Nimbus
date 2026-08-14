@@ -154,6 +154,29 @@ internal sealed class HttpRegistryClient : IRegistryClient, IDisposable
         catch { return new List<TransferIntent>(); }
     }
 
+    public async Task<bool> ReportTransferFailureAsync(TransferFailed failure, CancellationToken ct)
+    {
+        try
+        {
+            const string path = "/api/transfer-failures";
+            byte[] body = JsonSerializer.SerializeToUtf8Bytes(failure);
+            using var msg = SignedPost(path, body);
+            using var resp = await http.SendAsync(msg, ct).ConfigureAwait(false);
+            if (!resp.IsSuccessStatusCode)
+            {
+                Log.Warn($"registry POST {path} -> {(int)resp.StatusCode} {resp.ReasonPhrase}");
+                return false;
+            }
+            return true;
+        }
+        catch (OperationCanceledException) { return false; }
+        catch (Exception ex)
+        {
+            Log.Warn($"registry failure report failed: {ex.GetType().Name}: {ex.Message}");
+            return false;
+        }
+    }
+
     public async Task<List<NetworkBan>?> GetBansAsync(CancellationToken ct)
     {
         try

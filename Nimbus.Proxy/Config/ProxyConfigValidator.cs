@@ -156,6 +156,8 @@ internal static class ProxyConfigValidator
             result.Warn("registry.reservation_ttl_seconds is greater than registry.max_reservation_ttl_seconds and will be clamped");
         if (cfg.Registry.TransferIntentPollMs < 250)
             result.Warn("registry.transfer_intent_poll_ms below 250 will be clamped to 250");
+        if (cfg.Registry.SeamlessReadyWaitTimeoutSeconds <= 0)
+            result.Error("registry.seamless_ready_wait_timeout_seconds must be greater than zero");
 
         if (mode == "remote") ValidateRemoteRegistry(cfg, result);
         if (mode == "embedded") ValidateEmbeddedRegistry(cfg, result);

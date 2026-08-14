@@ -28,7 +28,8 @@ public static class Endpoints
         app.MapGet("/health", (TimeProvider clock) => Results.Ok(new { ok = true, ts = clock.GetUtcNow().ToUnixTimeSeconds() }));
 
         // Heartbeat.
-        app.MapPost("/api/heartbeat", async (HttpContext ctx, BackendRegistry reg, RegistryConfig cfg, ILoggerFactory lf) =>
+        app.MapPost("/api/heartbeat", async (HttpContext ctx, BackendRegistry reg, TransferFailureStore failures,
+            RegistryConfig cfg, ILoggerFactory lf) =>
         {
             var log = lf.CreateLogger("Heartbeat");
             BackendHeartbeat? hb;
@@ -46,7 +47,27 @@ public static class Endpoints
                 log.LogInformation("heartbeat {Id} players={P}/{M} tps={Tps:F1} maint={M2}",
                     hb.ServerId, hb.Players, hb.MaxPlayers, hb.Tps, hb.Maintenance);
 
-            return Results.Ok(new BackendHeartbeatResponse { Ok = true, NextHeartbeatSeconds = 5 });
+            return Results.Ok(new BackendHeartbeatResponse
+            {
+                Ok = true,
+                NextHeartbeatSeconds = 5,
+                SeamlessReadyWaitTimeoutSeconds = Math.Max(1, cfg.SeamlessReadyWaitTimeoutSeconds),
+                FailedTransfers = failures.DrainForSource(hb.ServerId),
+            });
+        });
+
+        // The proxy reports a failure after the registry accepted a seamless intent.
+        // The source backend receives it on its next heartbeat, which keeps the proxy
+        // and backends on the same authenticated control plane.
+        app.MapPost("/api/transfer-failures", async (HttpContext ctx, TransferFailureStore failures) =>
+        {
+            TransferFailed? failure;
+            try { failure = await ctx.Request.ReadFromJsonAsync<TransferFailed>(); }
+            catch { return Results.BadRequest(new { error = MalformedBody }); }
+
+            if (failure is null || !failures.Add(failure))
+                return Results.BadRequest(new { error = "ClientTransferId + SourceServerId required" });
+            return Results.Ok(new { ok = true });
         });
 
         // Network snapshot.

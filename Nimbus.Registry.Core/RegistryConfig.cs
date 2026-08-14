@@ -27,6 +27,10 @@ public sealed class RegistryConfig
     // If non-zero, refuse reservations whose TTL exceeds this many seconds.
     public int MaxReservationTtlSeconds { get; set; } = 300;
 
+    // Must match the proxy's seamless ready wait. Backends receive it in the heartbeat
+    // response and use it to calculate the client-side prepare expiry.
+    public int SeamlessReadyWaitTimeoutSeconds { get; set; } = 75;
+
     // If true, log every successful heartbeat at Information level.
     public bool LogHeartbeats { get; set; } = false;
 

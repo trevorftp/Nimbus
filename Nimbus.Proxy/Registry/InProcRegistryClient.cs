@@ -13,6 +13,7 @@ internal sealed class InProcRegistryClient : IRegistryClient
     private readonly BackendRegistry backends;
     private readonly ReservationService reservations;
     private readonly TransferIntentStore intents;
+    private readonly TransferFailureStore failures;
     private readonly BanStore bans;
     private readonly WhitelistStore whitelist;
     private readonly ApiTokenService tokens;
@@ -23,6 +24,7 @@ internal sealed class InProcRegistryClient : IRegistryClient
     {
         this.backends = stores.Backends;
         this.intents = stores.Intents;
+        this.failures = stores.Failures;
         this.bans = stores.Bans;
         this.whitelist = stores.Whitelist;
         this.cfg = cfg;
@@ -83,6 +85,9 @@ internal sealed class InProcRegistryClient : IRegistryClient
 
     public Task<List<TransferIntent>> DrainTransferIntentsAsync(CancellationToken ct)
         => Task.FromResult(intents.Drain());
+
+    public Task<bool> ReportTransferFailureAsync(TransferFailed failure, CancellationToken ct)
+        => Task.FromResult(failures.Add(failure));
 
     public Task<List<NetworkBan>?> GetBansAsync(CancellationToken ct)
         => Task.FromResult<List<NetworkBan>?>(bans.Active());

@@ -86,6 +86,10 @@ public class TransferIntentDispatcherTests
             => AdminHarness.WaitFor(() => Dispatched().Count >= count,
                 $"the dispatcher never minted {count} reservations (got {Dispatched().Count})");
 
+        public Task FailureReportsAtLeast(int count)
+            => AdminHarness.WaitFor(() => Registry.FailureReportsSoFar().Count >= count,
+                $"the dispatcher never reported {count} failures (got {Registry.FailureReportsSoFar().Count})");
+
         public async ValueTask DisposeAsync()
         {
             Cts.Cancel();
@@ -102,6 +106,7 @@ public class TransferIntentDispatcherTests
             Id = "intent-1",
             PlayerUid = uid,
             PlayerName = "alice",
+            SourceServerId = "source",
             TargetServerId = target,
             Mode = mode,
             Reason = reason,
@@ -201,6 +206,20 @@ public class TransferIntentDispatcherTests
         Assert.Equal(0, d.Registry.Resolves);
     }
 
+    [Fact]
+    public async Task ASeamlessIntentForAUidThisProxyDoesNotHold_ReportsOneFailure()
+    {
+        await using var d = await Dispatching.StartAsync();
+        await d.Harness.JoinAsync(Uid, "alice");
+        d.Queue(Intent(uid: "uid-on-another-proxy", mode: "seamless", clientTransferId: "transfer-1"));
+
+        await d.FailureReportsAtLeast(1);
+
+        var failure = Assert.Single(d.Registry.FailureReportsSoFar());
+        Assert.Equal("transfer-1", failure.ClientTransferId);
+        Assert.Contains("not connected", failure.Reason);
+    }
+
     [Theory]
     [InlineData("", "creative")]
     [InlineData(Uid, "")]
@@ -238,6 +257,20 @@ public class TransferIntentDispatcherTests
     }
 
     [Fact]
+    public async Task ASeamlessIntentForAnUnknownBackend_ReportsOneFailure()
+    {
+        await using var d = await Dispatching.StartAsync();
+        await d.Harness.JoinAsync(Uid, "alice");
+        d.Queue(Intent(mode: "seamless", clientTransferId: "transfer-unknown"));
+
+        await d.FailureReportsAtLeast(1);
+
+        var failure = Assert.Single(d.Registry.FailureReportsSoFar());
+        Assert.Equal("transfer-unknown", failure.ClientTransferId);
+        Assert.Contains("unavailable", failure.Reason);
+    }
+
+    [Fact]
     public async Task AnIntentForABackendThatStoppedHeartbeating_MovesNobody()
     {
         await using var d = await Dispatching.StartAsync();
@@ -269,6 +302,55 @@ public class TransferIntentDispatcherTests
         // flag went up must not walk past it.
         Assert.True(d.Registry.Resolves > 0);
         Assert.Empty(d.Dispatched());
+    }
+
+    [Theory]
+    [InlineData(true, false, "stale")]
+    [InlineData(false, true, "maintenance")]
+    public async Task ASeamlessIntentForAnUnavailableBackend_ReportsOneFailure(
+        bool stale, bool maintenance, string expectedReason)
+    {
+        await using var d = await Dispatching.StartAsync();
+        await d.Harness.JoinAsync(Uid, "alice");
+        d.Target("creative", stale, maintenance);
+        d.Queue(Intent(mode: "seamless", clientTransferId: "transfer-unavailable"));
+
+        await d.FailureReportsAtLeast(1);
+
+        var failure = Assert.Single(d.Registry.FailureReportsSoFar());
+        Assert.Equal("transfer-unavailable", failure.ClientTransferId);
+        Assert.Contains(expectedReason, failure.Reason);
+    }
+
+    [Fact]
+    public async Task ASeamlessDispatchThatCannotMintAReservation_ReportsOneFailure()
+    {
+        await using var d = await Dispatching.StartAsync();
+        d.Harness.Cfg.Transfers.AllowSeamless = true;
+        d.Harness.Cfg.Transfers.RequireSeamlessCapability = false;
+        var player = await d.Harness.JoinAsync(Uid, "alice");
+        await d.Harness.ReachReadyAsync(player);
+        d.Target("creative");
+        d.Registry.FailMint = true;
+        d.Queue(Intent(mode: "seamless", clientTransferId: "transfer-mint-failed"));
+
+        await d.FailureReportsAtLeast(1);
+
+        var failure = Assert.Single(d.Registry.FailureReportsSoFar());
+        Assert.Equal("transfer-mint-failed", failure.ClientTransferId);
+        Assert.Equal("registry mint failed", failure.Reason);
+    }
+
+    [Fact]
+    public async Task ARedirectIntentDoesNotCreateASeamlessFailureNotice()
+    {
+        await using var d = await Dispatching.StartAsync();
+        await d.Harness.JoinAsync(Uid, "alice");
+        d.Queue(Intent(clientTransferId: "redirect-id"));
+
+        await d.SettleAsync(4);
+
+        Assert.Empty(d.Registry.FailureReportsSoFar());
     }
 
     // ---- a registry that goes quiet ----

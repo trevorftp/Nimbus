@@ -483,6 +483,15 @@ public class ProxyConfigValidatorTests
             "registry.transfer_intent_poll_ms below 250 will be clamped to 250");
     }
 
+    [Theory]
+    [InlineData(0)]
+    [InlineData(-1)]
+    public void ASeamlessReadyWaitTimeoutOfZeroOrLess_IsAnError(int timeout)
+    {
+        AssertError(Validate(cfg => cfg.Registry.SeamlessReadyWaitTimeoutSeconds = timeout),
+            "registry.seamless_ready_wait_timeout_seconds must be greater than zero");
+    }
+
     [Fact]
     public void RemoteModeWithNoUrl_IsAnError()
     {

@@ -263,6 +263,49 @@ public class RegistryEndpointsTests
     }
 
     [Fact]
+    public async Task Heartbeat_DeliversFailuresOnlyToTheirSource_AndOnlyOnce()
+    {
+        await using var host = await Host.StartAsync(new RegistryConfig
+        {
+            SharedSecret = Secret,
+            SeamlessReadyWaitTimeoutSeconds = 41,
+        });
+        var failure = new TransferFailed
+        {
+            ClientTransferId = "transfer-51",
+            SourceServerId = "backend-1",
+            Reason = "target is in maintenance",
+            FailedAtUnix = 123,
+        };
+
+        var report = await host.Client.SendAsync(
+            Signed(HttpMethod.Post, host.BaseUrl, "/api/transfer-failures", body: failure));
+        Assert.Equal(HttpStatusCode.OK, report.StatusCode);
+
+        var retry = await host.Client.SendAsync(
+            Signed(HttpMethod.Post, host.BaseUrl, "/api/transfer-failures", body: failure));
+        Assert.Equal(HttpStatusCode.OK, retry.StatusCode);
+
+        var other = await host.Client.SendAsync(
+            Signed(HttpMethod.Post, host.BaseUrl, "/api/heartbeat", body: Heartbeat("backend-2")));
+        var otherBody = await other.Content.ReadFromJsonAsync<BackendHeartbeatResponse>();
+        Assert.Empty(otherBody!.FailedTransfers);
+
+        var first = await host.Client.SendAsync(
+            Signed(HttpMethod.Post, host.BaseUrl, "/api/heartbeat", body: Heartbeat()));
+        var firstBody = await first.Content.ReadFromJsonAsync<BackendHeartbeatResponse>();
+        var delivered = Assert.Single(firstBody!.FailedTransfers);
+        Assert.Equal("transfer-51", delivered.ClientTransferId);
+        Assert.Equal("target is in maintenance", delivered.Reason);
+        Assert.Equal(41, firstBody.SeamlessReadyWaitTimeoutSeconds);
+
+        var second = await host.Client.SendAsync(
+            Signed(HttpMethod.Post, host.BaseUrl, "/api/heartbeat", body: Heartbeat()));
+        var secondBody = await second.Content.ReadFromJsonAsync<BackendHeartbeatResponse>();
+        Assert.Empty(secondBody!.FailedTransfers);
+    }
+
+    [Fact]
     public async Task Heartbeat_WithoutAServerId_Is400()
     {
         await using var host = await Host.StartAsync();

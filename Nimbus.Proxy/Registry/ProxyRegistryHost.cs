@@ -83,6 +83,7 @@ internal sealed class ProxyRegistryHost : IAsyncDisposable
             BackendDropSeconds = cfg.Registry.BackendDropSeconds,
             NonceWindowSeconds = cfg.Registry.NonceWindowSeconds,
             MaxReservationTtlSeconds = cfg.Registry.MaxReservationTtlSeconds,
+            SeamlessReadyWaitTimeoutSeconds = cfg.Registry.SeamlessReadyWaitTimeoutSeconds,
             LogHeartbeats = false,
             StateDir = ResolveStateDir(cfg.Registry.EmbeddedStateDir),
             ApiTokens = new ApiTokensConfig
@@ -122,6 +123,7 @@ internal sealed class ProxyRegistryHost : IAsyncDisposable
                 Backends = app.Services.GetRequiredService<BackendRegistry>(),
                 Reservations = app.Services.GetRequiredService<ReservationStore>(),
                 Intents = app.Services.GetRequiredService<TransferIntentStore>(),
+                Failures = app.Services.GetRequiredService<TransferFailureStore>(),
                 Bans = app.Services.GetRequiredService<BanStore>(),
                 Whitelist = app.Services.GetRequiredService<WhitelistStore>(),
                 Tokens = app.Services.GetRequiredService<ApiTokenStore>(),
@@ -137,6 +139,7 @@ internal sealed class ProxyRegistryHost : IAsyncDisposable
             Backends = new BackendRegistry(coreCfg),
             Reservations = new ReservationStore(),
             Intents = new TransferIntentStore(),
+            Failures = new TransferFailureStore(),
             Bans = new BanStore(state: RegistryStateFiles.Bans(coreCfg.StateDir)),
             Whitelist = new WhitelistStore(state: RegistryStateFiles.Whitelist(coreCfg.StateDir)),
             // Tokens are worth minting in this mode even though nothing here answers a bearer
