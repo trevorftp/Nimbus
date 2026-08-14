@@ -584,6 +584,21 @@ public class HttpRegistryClientTests
     }
 
     [Fact]
+    public async Task ACanceledFailureReport_ReturnsFalse()
+    {
+        await using var registry = await Registry.StartAsync();
+        using var client = ClientFor(registry);
+        using var cts = new CancellationTokenSource();
+        cts.Cancel();
+
+        Assert.False(await client.ReportTransferFailureAsync(new TransferFailed
+        {
+            SourceServerId = "source",
+            ClientTransferId = "transfer-canceled",
+        }, cts.Token));
+    }
+
+    [Fact]
     public async Task AUrlWithATrailingSlash_ReachesTheSameEndpoints()
     {
         await using var registry = await Registry.StartAsync();

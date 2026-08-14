@@ -39,6 +39,7 @@ internal sealed class FakeRegistryClient : IRegistryClient
 
     public readonly List<TransferFailed> FailureReports = new();
     public bool FailFailureReport { get; set; }
+    public bool ThrowFailureReport { get; set; }
 
     /// <summary>Backends ResolveByServerIdAsync knows about, keyed by serverId.</summary>
     public Dictionary<string, BackendSnapshot> Backends = new(StringComparer.OrdinalIgnoreCase);
@@ -63,12 +64,14 @@ internal sealed class FakeRegistryClient : IRegistryClient
     /// <summary>True makes every mint come back null, which is how a registry that is up but
     /// refusing (expired secret, unknown target) looks to the transfer paths.</summary>
     public bool FailMint;
+    public bool ThrowMint;
 
     public Task<TransferReservation?> MintReservationAsync(string playerUid, string playerName,
         string targetServerId, string? reason, CancellationToken ct,
         string? realRemoteIp = null, int realRemotePort = 0, string? clientTransferId = null)
     {
         lock (Mints) Mints.Add(new MintCall(playerUid, playerName, targetServerId, reason, clientTransferId));
+        if (ThrowMint) throw new InvalidOperationException("mint failed unexpectedly");
         if (FailMint) return Task.FromResult<TransferReservation?>(null);
         return Task.FromResult<TransferReservation?>(new TransferReservation
         {
@@ -104,6 +107,7 @@ internal sealed class FakeRegistryClient : IRegistryClient
     public Task<bool> ReportTransferFailureAsync(TransferFailed failure, CancellationToken ct)
     {
         lock (FailureReports) FailureReports.Add(failure);
+        if (ThrowFailureReport) throw new InvalidOperationException("failure report failed unexpectedly");
         return Task.FromResult(!FailFailureReport);
     }
 

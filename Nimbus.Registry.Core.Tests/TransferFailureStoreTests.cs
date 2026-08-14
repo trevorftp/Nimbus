@@ -21,9 +21,11 @@ public class TransferFailureStoreTests
     {
         var store = new TransferFailureStore(clock);
 
+        Assert.False(store.Add(null!));
         Assert.False(store.Add(Failure(source: "")));
         Assert.False(store.Add(Failure(transfer: "")));
         Assert.Empty(store.DrainForSource("source"));
+        Assert.Empty(store.DrainForSource(""));
     }
 
     [Fact]
@@ -68,6 +70,39 @@ public class TransferFailureStoreTests
         var notices = store.DrainForSource("source");
         Assert.Equal(123, notices[0].FailedAtUnix);
         Assert.Equal(clock.NowUnix, notices[1].FailedAtUnix);
+    }
+
+    [Fact]
+    public void Drain_PreservesInsertionOrderWhenFailureTimesMatch()
+    {
+        var store = new TransferFailureStore(clock);
+        store.Add(new TransferFailed
+        {
+            SourceServerId = "source",
+            ClientTransferId = "z-first",
+            Reason = null!,
+            FailedAtUnix = 100,
+        });
+        store.Add(new TransferFailed
+        {
+            SourceServerId = "source",
+            ClientTransferId = "a-second",
+            FailedAtUnix = 100,
+        });
+
+        Assert.Equal(new[] { "z-first", "a-second" },
+            store.DrainForSource("source").Select(notice => notice.ClientTransferId));
+    }
+
+    [Fact]
+    public void Prune_DropsExpiredEntries()
+    {
+        var store = new TransferFailureStore(clock, TimeSpan.FromSeconds(30));
+        store.Add(Failure());
+        clock.Advance(TimeSpan.FromSeconds(31));
+
+        Assert.Equal(1, store.Prune());
+        Assert.Equal(0, store.Prune());
     }
 
     [Fact]

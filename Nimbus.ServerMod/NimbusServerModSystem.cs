@@ -761,10 +761,10 @@ public sealed class NimbusServerModSystem : ModSystem
 
     private void RemoveInFlightForPlayer(string playerUid)
     {
-        foreach (var pair in inFlightSeamless)
+        foreach (var pair in inFlightSeamless.Where(pair =>
+            string.Equals(pair.Value.PlayerUid, playerUid, StringComparison.OrdinalIgnoreCase)))
         {
-            if (string.Equals(pair.Value.PlayerUid, playerUid, StringComparison.OrdinalIgnoreCase))
-                inFlightSeamless.TryRemove(pair.Key, out _);
+            inFlightSeamless.TryRemove(pair.Key, out _);
         }
     }
 

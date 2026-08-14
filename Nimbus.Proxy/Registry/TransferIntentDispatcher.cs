@@ -134,7 +134,7 @@ internal sealed class TransferIntentDispatcher
         {
             ClientTransferId = intent.ClientTransferId,
             SourceServerId = intent.SourceServerId,
-            Reason = string.IsNullOrWhiteSpace(reason) ? "seamless transfer failed" : reason,
+            Reason = reason,
             FailedAtUnix = DateTimeOffset.UtcNow.ToUnixTimeSeconds(),
         };
 

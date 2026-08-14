@@ -32,10 +32,17 @@ public class TransferIntentDispatcherTests
         public required Task Loop { get; init; }
         public FakeRegistryClient Registry => Harness.Registry;
 
-        public static async Task<Dispatching> StartAsync(params string[] serverIds)
+        public static Task<Dispatching> StartAsync(params string[] serverIds)
+            => StartAsync((Action<ProxyConfig>?)null, serverIds);
+
+        public static async Task<Dispatching> StartAsync(Action<ProxyConfig>? configure, params string[] serverIds)
         {
             var harness = await AdminHarness.StartAsync(
-                cfg => cfg.Registry.TransferIntentPollMs = 1,
+                cfg =>
+                {
+                    cfg.Registry.TransferIntentPollMs = 1;
+                    configure?.Invoke(cfg);
+                },
                 serverIds: serverIds.Length == 0 ? new[] { "hub" } : serverIds);
             var cts = new CancellationTokenSource();
             var dispatcher = new TransferIntentDispatcher(harness.Cfg, harness.Registry,
@@ -329,7 +336,7 @@ public class TransferIntentDispatcherTests
         d.Harness.Cfg.Transfers.AllowSeamless = true;
         d.Harness.Cfg.Transfers.RequireSeamlessCapability = false;
         var player = await d.Harness.JoinAsync(Uid, "alice");
-        await d.Harness.ReachReadyAsync(player);
+        await AdminHarness.ReachReadyAsync(player);
         d.Target("creative");
         d.Registry.FailMint = true;
         d.Queue(Intent(mode: "seamless", clientTransferId: "transfer-mint-failed"));
@@ -339,6 +346,67 @@ public class TransferIntentDispatcherTests
         var failure = Assert.Single(d.Registry.FailureReportsSoFar());
         Assert.Equal("transfer-mint-failed", failure.ClientTransferId);
         Assert.Equal("registry mint failed", failure.Reason);
+    }
+
+    [Fact]
+    public async Task ASeamlessDispatchThatNeverReachesReady_ReportsOneFailure()
+    {
+        await using var d = await Dispatching.StartAsync(
+            cfg => cfg.Registry.SeamlessReadyWaitTimeoutSeconds = 1);
+        await d.Harness.JoinAsync(Uid, "alice");
+        d.Target("creative");
+        d.Queue(Intent(mode: "seamless", clientTransferId: "transfer-timeout"));
+
+        await d.FailureReportsAtLeast(1);
+
+        var failure = Assert.Single(d.Registry.FailureReportsSoFar());
+        Assert.Equal("transfer-timeout", failure.ClientTransferId);
+        Assert.Contains("timed out", failure.Reason);
+    }
+
+    [Fact]
+    public async Task ADispatchException_ReportsOneFailure()
+    {
+        await using var d = await Dispatching.StartAsync();
+        d.Harness.Cfg.Transfers.AllowSeamless = true;
+        d.Harness.Cfg.Transfers.RequireSeamlessCapability = false;
+        var player = await d.Harness.JoinAsync(Uid, "alice");
+        await AdminHarness.ReachReadyAsync(player);
+        d.Target("creative");
+        d.Registry.ThrowMint = true;
+        d.Queue(Intent(mode: "seamless", clientTransferId: "transfer-exception"));
+
+        await d.FailureReportsAtLeast(1);
+
+        var failure = Assert.Single(d.Registry.FailureReportsSoFar());
+        Assert.Equal("transfer-exception", failure.ClientTransferId);
+        Assert.Contains("failed to dispatch", failure.Reason);
+    }
+
+    [Fact]
+    public async Task ARejectedFailureNotice_IsLoggedAndRetainedForInspection()
+    {
+        await using var d = await Dispatching.StartAsync();
+        await d.Harness.JoinAsync(Uid, "alice");
+        d.Registry.FailFailureReport = true;
+        d.Queue(Intent(uid: "uid-on-another-proxy", mode: "seamless", clientTransferId: "transfer-rejected"));
+
+        await d.FailureReportsAtLeast(1);
+
+        Assert.Equal("transfer-rejected", Assert.Single(d.Registry.FailureReportsSoFar()).ClientTransferId);
+    }
+
+    [Fact]
+    public async Task AFailureNoticeException_IsSwallowedByTheDispatcher()
+    {
+        await using var d = await Dispatching.StartAsync();
+        await d.Harness.JoinAsync(Uid, "alice");
+        d.Registry.ThrowFailureReport = true;
+        d.Queue(Intent(uid: "uid-on-another-proxy", mode: "seamless", clientTransferId: "transfer-report-error"));
+
+        await d.FailureReportsAtLeast(1);
+
+        Assert.Equal("transfer-report-error", Assert.Single(d.Registry.FailureReportsSoFar()).ClientTransferId);
     }
 
     [Fact]

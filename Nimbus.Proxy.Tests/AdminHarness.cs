@@ -140,7 +140,7 @@ internal sealed class AdminHarness : IAsyncDisposable
         return handle;
     }
 
-    public async Task ReachReadyAsync(PlayerHandle handle)
+    public static async Task ReachReadyAsync(PlayerHandle handle)
     {
         await handle.SendAsync(ClientFrames.ClientPlaying());
         await WaitFor(() => handle.Session.Phase == SessionState.Phase.Ready,

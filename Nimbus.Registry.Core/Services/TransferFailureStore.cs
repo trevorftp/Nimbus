@@ -13,6 +13,7 @@ public sealed class TransferFailureStore
     private readonly object gate = new();
     private readonly TimeProvider clock;
     private readonly long ttlSeconds;
+    private long nextSequence;
 
     public TransferFailureStore(TimeProvider? clock = null, TimeSpan? ttl = null)
     {
@@ -29,19 +30,18 @@ public sealed class TransferFailureStore
             return false;
 
         long now = clock.GetUtcNow().ToUnixTimeSeconds();
-        var notice = new TransferFailed
+        TransferFailed notice = new TransferFailed
         {
             ClientTransferId = failure.ClientTransferId.Trim(),
             SourceServerId = failure.SourceServerId.Trim(),
             Reason = failure.Reason ?? "seamless transfer failed",
             FailedAtUnix = failure.FailedAtUnix > 0 ? failure.FailedAtUnix : now,
         };
-        var entry = new Entry(notice, now + ttlSeconds);
         string key = Key(notice.SourceServerId, notice.ClientTransferId);
         lock (gate)
         {
             if (!entries.TryGetValue(key, out Entry? existing) || existing.ExpiresAtUnix <= now)
-                entries[key] = entry;
+                entries[key] = new Entry(notice, now + ttlSeconds, ++nextSequence);
         }
         return true;
     }
@@ -52,7 +52,7 @@ public sealed class TransferFailureStore
 
         sourceServerId = sourceServerId.Trim();
         long now = clock.GetUtcNow().ToUnixTimeSeconds();
-        var result = new List<TransferFailed>();
+        List<Entry> result = new List<Entry>();
         lock (gate)
         {
             foreach (var pair in entries.ToArray())
@@ -67,18 +67,15 @@ public sealed class TransferFailureStore
                 if (!string.Equals(entry.Notice.SourceServerId, sourceServerId, StringComparison.OrdinalIgnoreCase))
                     continue;
                 entries.Remove(pair.Key);
-                result.Add(entry.Notice);
+                result.Add(entry);
             }
         }
 
-        result.Sort((left, right) =>
-        {
-            int time = left.FailedAtUnix.CompareTo(right.FailedAtUnix);
-            return time != 0
-                ? time
-                : string.Compare(left.ClientTransferId, right.ClientTransferId, StringComparison.Ordinal);
-        });
-        return result;
+        result.Sort((left, right) => left.Sequence.CompareTo(right.Sequence));
+        List<TransferFailed> notices = new List<TransferFailed>(result.Count);
+        foreach (Entry entry in result)
+            notices.Add(entry.Notice);
+        return notices;
     }
 
     public int Prune()
@@ -99,5 +96,5 @@ public sealed class TransferFailureStore
     private static string Key(string sourceServerId, string clientTransferId)
         => sourceServerId.Length + ":" + sourceServerId + clientTransferId;
 
-    private sealed record Entry(TransferFailed Notice, long ExpiresAtUnix);
+    private sealed record Entry(TransferFailed Notice, long ExpiresAtUnix, long Sequence);
 }
