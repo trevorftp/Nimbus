@@ -140,6 +140,13 @@ internal sealed class AdminHarness : IAsyncDisposable
         return handle;
     }
 
+    public static async Task ReachReadyAsync(PlayerHandle handle)
+    {
+        await handle.SendAsync(ClientFrames.ClientPlaying());
+        await WaitFor(() => handle.Session.Phase == SessionState.Phase.Ready,
+            $"session {handle.Id} never reached Ready");
+    }
+
     /// <summary>Pushes <paramref name="entries"/> into the registry and warms the proxy's cache
     /// from it, which is what whitelist enforcement reads before letting anyone join.</summary>
     public async Task WhitelistAsync(params Nimbus.Shared.Models.WhitelistEntry[] entries)
@@ -281,6 +288,12 @@ internal sealed class PlayerHandle : IDisposable
     public long Id { get; }
     public ProxySession Session { get; }
     public Task Running { get; }
+
+    public async Task SendAsync(byte[] frame)
+    {
+        await player.GetStream().WriteAsync(frame);
+        await player.GetStream().FlushAsync();
+    }
 
     /// <summary>True once the proxy dropped this player's socket. The kick is synchronous inside
     /// the command, so a false here after the command has replied means the player stayed on.</summary>

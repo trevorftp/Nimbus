@@ -1,4 +1,5 @@
 using Atlas.Api;
+using System.Reflection;
 using Vintagestory.API.Common;
 using Vintagestory.API.Config;
 using Vintagestory.API.Server;
@@ -11,7 +12,7 @@ namespace Nimbus.ServerMod.Tests;
 /// /nimbus reload recreates the registry client (#4), the file + reload pair brings the
 /// mod from any state to a fully wired one.
 ///
-/// Reads still go through reflection: the game's ModLoader loads a COPY of the staged
+/// Reads and the narrow packet callback injection go through reflection: the game's ModLoader loads a COPY of the staged
 /// Nimbus.ServerMod.dll, so its types are never identity-equal to compile-time
 /// references and a typed cast cannot work.
 /// </summary>
@@ -103,6 +104,35 @@ public sealed class NimbusHarness
     /// <summary>The mod's LastSeamlessCommit, empty until the target sends a commit.</summary>
     public string LastSeamlessCommit
         => (string)(modSystem.GetType().GetProperty("LastSeamlessCommit")!.GetValue(modSystem) ?? "");
+
+    public string LastSeamlessAbort
+        => (string)(modSystem.GetType().GetProperty("LastSeamlessAbort")!.GetValue(modSystem) ?? "");
+
+    public string PendingSeamlessTransferId
+    {
+        get
+        {
+            FieldInfo mapField = modSystem.GetType().GetField("pendingSeamless",
+                BindingFlags.Instance | BindingFlags.NonPublic)!;
+            object map = mapField.GetValue(modSystem)!;
+            PropertyInfo keys = map.GetType().GetProperty("Keys")!;
+            return ((IEnumerable<string>)keys.GetValue(map)!).FirstOrDefault() ?? "";
+        }
+    }
+
+    /// <summary>Completes the server-side ready handler with a packet-shaped object. Atlas does
+    /// not run a Nimbus client, so the scenario uses the mod's real private handler after reading
+    /// the generated transfer id from the pending handshake map.</summary>
+    public void AcknowledgeSeamlessReady(ITestPlayer player, string transferId)
+    {
+        Type modType = modSystem.GetType();
+        Type readyType = modType.Assembly.GetType("Nimbus.ServerMod.NimbusSeamlessReady")!;
+        object ready = Activator.CreateInstance(readyType)!;
+        readyType.GetProperty("TransferId")!.SetValue(ready, transferId);
+        MethodInfo handler = modType.GetMethod("OnSeamlessReady",
+            BindingFlags.Instance | BindingFlags.NonPublic)!;
+        handler.Invoke(modSystem, new[] { player.Player, ready });
+    }
 
     /// <summary>Calls the mod's public GetForwardedPlayer(uid); null when not forwarded.</summary>
     public object? GetForwardedPlayer(string playerUid)

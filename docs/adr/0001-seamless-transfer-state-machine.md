@@ -1,6 +1,6 @@
 # ADR 0001: Seamless transfer state machine
 
-Status: accepted. Date: 2026-07-27. Relates to issue #19.
+Status: accepted. Date: 2026-07-27. Relates to issues #19 and #51.
 
 ## Context
 
@@ -47,7 +47,7 @@ timeout, registry rejection, internal error). After the transfer has started the
 can no longer signal anything; a transfer that dies mid-flight surfaces to the client as
 a disconnect, which is also what the vanilla path would do.
 
-### Known gap: dispatch failures signal nothing
+### Resolved gap: dispatch failures signal nothing
 
 The client contract is "exactly one of Commit or Abort" only for failures the source can
 see synchronously. `PostTransferIntentAsync` confirms the registry *accepted* the intent,
@@ -56,12 +56,24 @@ stale or maintenance target, or the dispatcher's ready-wait timeout all just log
 return: `TransferIntentResponse` is fire-and-forget once queued, so nothing reaches back to
 the source backend.
 
-That leaves a real window, after `Ready` and before the redirect or splice begins, where
-the client sits veiled and receives neither packet. It predates this design (the
-dispatcher has always been fire-and-forget) and closing it needs a path from the proxy
-back to the source backend, most likely through the registry. Tracked separately as #51 rather
-than papered over: a client mod should treat a prepare with no resolution as expiring
-after a timeout, not assume one of the two packets always arrives.
+That left a real window, after `Ready` and before the redirect or splice began, where the
+client sat veiled and received neither packet. Issue #51 closes that window through the
+registry control plane:
+
+- The proxy reports each failed seamless dispatch as a `TransferFailed` notice carrying the
+  source server id, client transfer id, reason and timestamp.
+- The registry keeps notices for two minutes, deduplicates them by source and transfer id,
+  and drains them from the matching source backend's next heartbeat. Delivery is destructive
+  because the source's in-flight map removes the transfer before it sends the abort.
+- The registry heartbeat advertises the proxy's seamless ready-wait timeout. The source puts a
+  derived expiry on `NimbusSeamlessPrepare` and keeps a separate post-`Ready` in-flight map
+  until the dispatch window closes.
+- The source sends `NimbusSeamlessAbort` on a matching notice. Unknown source ids and transfer
+  ids are ignored, so a stale or misrouted notice cannot abort another player's transfer.
+
+The notice path covers proxy-side validation, target health checks, the ready gate and the
+redirect or splice result. It does not add a reason enum or a reservation status field; the
+free-form reason remains operator-visible without changing the existing reservation contract.
 
 ## Consequences
 

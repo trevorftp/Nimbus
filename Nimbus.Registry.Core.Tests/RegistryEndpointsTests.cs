@@ -112,6 +112,26 @@ public class RegistryEndpointsTests
         return msg;
     }
 
+    private static HttpRequestMessage SignedRaw(string baseUrl, string path, string json)
+    {
+        byte[] bytes = Encoding.UTF8.GetBytes(json);
+        var msg = new HttpRequestMessage(HttpMethod.Post, baseUrl.TrimEnd('/') + path)
+        {
+            Content = new ByteArrayContent(bytes),
+        };
+        msg.Content.Headers.ContentType = new MediaTypeHeaderValue("application/json");
+        long timestamp = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+        string nonce = HmacSigner.NewNonce();
+        int protocol = NimbusProtocol.ProtocolVersion;
+        string signature = HmacSigner.Sign(Secret,
+            HmacSigner.CanonicalString(HttpMethod.Post.Method, path, protocol, timestamp, nonce, bytes));
+        msg.Headers.Add(NimbusProtocol.SignatureHeader, signature);
+        msg.Headers.Add(NimbusProtocol.TimestampHeader, timestamp.ToString());
+        msg.Headers.Add(NimbusProtocol.NonceHeader, nonce);
+        msg.Headers.Add(NimbusProtocol.ProtocolHeader, protocol.ToString());
+        return msg;
+    }
+
     /// <summary>Writes a hand-built request straight onto the socket and hands back what came
     /// out, for the framings HttpClient will not produce.</summary>
     private static async Task<string> SendRawAsync(string baseUrl, string request)
@@ -260,6 +280,63 @@ public class RegistryEndpointsTests
         Assert.False(backend.Stale);
         Assert.Equal(3, snapshot.TotalPlayers);
         Assert.Equal(32, snapshot.TotalCapacity);
+    }
+
+    [Fact]
+    public async Task Heartbeat_DeliversFailuresOnlyToTheirSource_AndOnlyOnce()
+    {
+        await using var host = await Host.StartAsync(new RegistryConfig
+        {
+            SharedSecret = Secret,
+            SeamlessReadyWaitTimeoutSeconds = 41,
+        });
+        var failure = new TransferFailed
+        {
+            ClientTransferId = "transfer-51",
+            SourceServerId = "backend-1",
+            Reason = "target is in maintenance",
+            FailedAtUnix = 123,
+        };
+
+        var report = await host.Client.SendAsync(
+            Signed(HttpMethod.Post, host.BaseUrl, "/api/transfer-failures", body: failure));
+        Assert.Equal(HttpStatusCode.OK, report.StatusCode);
+
+        var retry = await host.Client.SendAsync(
+            Signed(HttpMethod.Post, host.BaseUrl, "/api/transfer-failures", body: failure));
+        Assert.Equal(HttpStatusCode.OK, retry.StatusCode);
+
+        var other = await host.Client.SendAsync(
+            Signed(HttpMethod.Post, host.BaseUrl, "/api/heartbeat", body: Heartbeat("backend-2")));
+        var otherBody = await other.Content.ReadFromJsonAsync<BackendHeartbeatResponse>();
+        Assert.Empty(otherBody!.FailedTransfers);
+
+        var first = await host.Client.SendAsync(
+            Signed(HttpMethod.Post, host.BaseUrl, "/api/heartbeat", body: Heartbeat()));
+        var firstBody = await first.Content.ReadFromJsonAsync<BackendHeartbeatResponse>();
+        var delivered = Assert.Single(firstBody!.FailedTransfers);
+        Assert.Equal("transfer-51", delivered.ClientTransferId);
+        Assert.Equal("target is in maintenance", delivered.Reason);
+        Assert.Equal(41, firstBody.SeamlessReadyWaitTimeoutSeconds);
+
+        var second = await host.Client.SendAsync(
+            Signed(HttpMethod.Post, host.BaseUrl, "/api/heartbeat", body: Heartbeat()));
+        var secondBody = await second.Content.ReadFromJsonAsync<BackendHeartbeatResponse>();
+        Assert.Empty(secondBody!.FailedTransfers);
+    }
+
+    [Fact]
+    public async Task TransferFailure_RejectsMalformedAndIncompleteBodies()
+    {
+        await using var host = await Host.StartAsync();
+
+        var malformed = await host.Client.SendAsync(
+            SignedRaw(host.BaseUrl, "/api/transfer-failures", "{"));
+        Assert.Equal(HttpStatusCode.BadRequest, malformed.StatusCode);
+
+        var incomplete = await host.Client.SendAsync(
+            SignedRaw(host.BaseUrl, "/api/transfer-failures", "{}"));
+        Assert.Equal(HttpStatusCode.BadRequest, incomplete.StatusCode);
     }
 
     [Fact]

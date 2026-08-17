@@ -36,6 +36,7 @@ public sealed class NimbusSeamlessPrepare
     [ProtoMember(3)] public string TransferId { get; set; } = "";
     [ProtoMember(2)] public string TargetServerId { get; set; } = "";
     [ProtoMember(1)] public string Reason { get; set; } = "";
+    [ProtoMember(4)] public int ExpiresInSeconds { get; set; }
 }
 
 [ProtoContract]

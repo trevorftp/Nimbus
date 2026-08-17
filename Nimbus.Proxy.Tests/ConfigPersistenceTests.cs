@@ -51,6 +51,7 @@ public class ConfigPersistenceTests : IDisposable
         original.Transfers.DefaultMode = "seamless";
         original.Transfers.AllowSeamless = true;
         original.Transfers.RedirectAddress = "play.example.net:42420";
+        original.Registry.SeamlessReadyWaitTimeoutSeconds = 41;
         original.Admin.Secret = "operator-secret";
         original.Admin.GrantedPermissions = new List<string> { "nimbus.command.ban", "nimbus.command.kick" };
         original.Whitelist.Network = true;
@@ -71,6 +72,7 @@ public class ConfigPersistenceTests : IDisposable
         Assert.Equal("seamless", loaded.Transfers.DefaultMode);
         Assert.True(loaded.Transfers.AllowSeamless);
         Assert.Equal("play.example.net:42420", loaded.Transfers.RedirectAddress);
+        Assert.Equal(41, loaded.Registry.SeamlessReadyWaitTimeoutSeconds);
         Assert.Equal("operator-secret", loaded.Admin.Secret);
         Assert.Equal(2, loaded.Admin.GrantedPermissions.Count);
         Assert.True(loaded.Whitelist.Network);

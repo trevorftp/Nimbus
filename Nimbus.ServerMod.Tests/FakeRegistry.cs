@@ -61,6 +61,18 @@ public sealed class FakeRegistry : IDisposable
     /// </summary>
     public object? TransferIntentResponse { get; set; }
 
+    /// <summary>When true, the next seamless intent response remains successful but the next
+    /// source heartbeat carries a failure notice for its client transfer id. This models the
+    /// proxy accepting the intent and failing after the source has entered the in-flight map.</summary>
+    public bool FailNextSeamlessIntent { get; set; }
+
+    public string FailureReason { get; set; } = "target backend is unavailable";
+    public int FailureNoticeDeliveries => Volatile.Read(ref failureNoticeDeliveries);
+
+    private string? failureTransferId;
+    private bool failureNoticeDelivered;
+    private int failureNoticeDeliveries;
+
     public FakeRegistry(string sharedSecret)
     {
         this.sharedSecret = sharedSecret;
@@ -152,7 +164,33 @@ public sealed class FakeRegistry : IDisposable
         }
         else if (path == "/api/heartbeat")
         {
-            payload = new { ok = true };
+            object[] failures = Array.Empty<object>();
+            lock (gate)
+            {
+                if (!failureNoticeDelivered && !string.IsNullOrWhiteSpace(failureTransferId))
+                {
+                    failureNoticeDelivered = true;
+                    failureNoticeDeliveries++;
+                    failures = new object[]
+                    {
+                        new
+                        {
+                            clientTransferId = failureTransferId,
+                            sourceServerId = "backend-test",
+                            reason = FailureReason,
+                            failedAtUnix = DateTimeOffset.UtcNow.ToUnixTimeSeconds(),
+                        },
+                    };
+                }
+            }
+
+            var heartbeat = new Dictionary<string, object>
+            {
+                ["ok"] = true,
+                ["seamlessReadyWaitTimeoutSeconds"] = 75,
+            };
+            if (failures.Length > 0) heartbeat["failedTransfers"] = failures;
+            payload = heartbeat;
         }
         else if (path == "/api/servers")
         {
@@ -166,6 +204,25 @@ public sealed class FakeRegistry : IDisposable
         }
         else if (path == "/api/transfer-intents")
         {
+            if (FailNextSeamlessIntent)
+            {
+                try
+                {
+                    using JsonDocument document = JsonDocument.Parse(body);
+                    JsonElement root = document.RootElement;
+                    string mode = root.GetProperty("Mode").GetString() ?? "";
+                    string transferId = root.GetProperty("ClientTransferId").GetString() ?? "";
+                    if ((string.Equals(mode, "seamless", StringComparison.OrdinalIgnoreCase)
+                            || string.Equals(mode, "splice", StringComparison.OrdinalIgnoreCase))
+                        && transferId.Length > 0)
+                    {
+                        lock (gate) failureTransferId = transferId;
+                        FailNextSeamlessIntent = false;
+                    }
+                }
+                catch { /* the request assertion reports malformed test traffic */ }
+            }
+
             payload = TransferIntentResponse
                 ?? new { ok = false, error = "target server not registered" };
         }

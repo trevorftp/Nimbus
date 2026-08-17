@@ -43,6 +43,8 @@ Outbound (transfer commands):
   callers through its `RequiresPlayer` precondition.
 - Seamless mode without a client ack (the dummy player has no Nimbus client mod) aborts
   on the prepare timeout and never reaches the registry.
+- A proxy failure notice delivered on the next heartbeat removes the source transfer from
+  its in-flight map and sends the source-side abort packet.
 
 Operations:
 
@@ -62,9 +64,9 @@ timeout path.
   exactly like an operator does, by writing `nimbus-server.json` into the live data path
   and running `/nimbus reload` (which recreates the registry client since #4). No private
   state is written.
-- **Reflection for reads only**: the game's ModLoader loads a *copy* of the staged
+- **Reflection at the assembly boundary**: the game's ModLoader loads a *copy* of the staged
   `Nimbus.ServerMod.dll`, so its types are never identity-equal to compile-time
-  references; reading mod state back (`GetForwardedPlayer`) goes through reflection.
+  references; reading mod state and invoking the narrow ready callback go through reflection.
 - **Kick detection**: `ITestPlayer.IsConnected` (Atlas 0.5+) reports the settled state
   after a server-side kick; wait with `Until(() => !player.IsConnected)`.
 - **Shared world state**: scenarios in a class share the mod instance, and

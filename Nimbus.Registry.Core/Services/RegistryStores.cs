@@ -15,6 +15,7 @@ public sealed class RegistryStores
     public required BackendRegistry Backends { get; init; }
     public required ReservationStore Reservations { get; init; }
     public required TransferIntentStore Intents { get; init; }
+    public required TransferFailureStore Failures { get; init; }
     public required BanStore Bans { get; init; }
     public required WhitelistStore Whitelist { get; init; }
     public required ApiTokenStore Tokens { get; init; }

@@ -11,6 +11,7 @@ using Vintagestory.API.Server;
 public sealed class NimbusServerModSystem : ModSystem
 {
     private const string ConfigFileName = "nimbus-server.json";
+    private const int DefaultSeamlessReadyWaitTimeoutSeconds = 75;
 
     private ICoreServerAPI? api;
     private IServerNetworkChannel? channel;
@@ -22,9 +23,12 @@ public sealed class NimbusServerModSystem : ModSystem
 
     private readonly ConcurrentDictionary<string, NimbusClientCapability> capabilities = new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<string, PendingSeamlessHandshake> pendingSeamless = new(StringComparer.Ordinal);
+    private readonly ConcurrentDictionary<string, InFlightSeamlessTransfer> inFlightSeamless = new(StringComparer.OrdinalIgnoreCase);
     // Forwarding data keyed by playerUID. Populated when a player arrives via the proxy
     // (reservation consumed on join). Cleared on disconnect.
     private readonly ConcurrentDictionary<string, TransferReservation> forwarding = new(StringComparer.OrdinalIgnoreCase);
+    private int advertisedReadyWaitTimeoutSeconds = DefaultSeamlessReadyWaitTimeoutSeconds;
+    private int heartbeatIntervalSeconds = 5;
 
     public NetworkSnapshot LastSnapshot { get; private set; } = new();
     public DateTime LastSnapshotUtc { get; private set; }
@@ -34,6 +38,7 @@ public sealed class NimbusServerModSystem : ModSystem
     // /nimbus status. Seamless failures are otherwise invisible from the receiving side,
     // which is where an operator looks when a player reports a stuck transfer screen.
     public string LastSeamlessCommit { get; private set; } = "";
+    public string LastSeamlessAbort { get; private set; } = "";
 
     public override bool ShouldLoad(EnumAppSide forSide)
         => forSide == EnumAppSide.Server;
@@ -49,6 +54,7 @@ public sealed class NimbusServerModSystem : ModSystem
         {
             capabilities.TryRemove(player.PlayerUID, out _);
             forwarding.TryRemove(player.PlayerUID, out _);
+            RemoveInFlightForPlayer(player.PlayerUID);
         };
         api.Event.PlayerJoin += OnPlayerJoin;
 
@@ -69,6 +75,7 @@ public sealed class NimbusServerModSystem : ModSystem
         registry = new NimbusRegistryClient(config);
         stop = new CancellationTokenSource();
         startUnix = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+        Volatile.Write(ref heartbeatIntervalSeconds, Math.Max(1, config.HeartbeatIntervalSeconds));
         var stopToken = stop.Token;
         heartbeatTask = Task.Run(() => HeartbeatLoopAsync(stopToken), stopToken);
         LastStatus = "starting";
@@ -203,11 +210,21 @@ public sealed class NimbusServerModSystem : ModSystem
             try
             {
                 var response = await client.HeartbeatAsync(BuildHeartbeat(), ct).ConfigureAwait(false);
+                if (response != null)
+                {
+                    ProcessFailureNotices(response.FailedTransfers);
+                    if (response.SeamlessReadyWaitTimeoutSeconds > 0)
+                        Volatile.Write(ref advertisedReadyWaitTimeoutSeconds, response.SeamlessReadyWaitTimeoutSeconds);
+                }
                 if (response?.Ok == true)
                 {
                     LastStatus = "ok";
                     failures = 0;
-                    if (response.NextHeartbeatSeconds > 0) interval = response.NextHeartbeatSeconds;
+                    if (response.NextHeartbeatSeconds > 0)
+                    {
+                        interval = response.NextHeartbeatSeconds;
+                        Volatile.Write(ref heartbeatIntervalSeconds, interval);
+                    }
                 }
                 else
                 {
@@ -230,6 +247,8 @@ public sealed class NimbusServerModSystem : ModSystem
                 if (failures == 1 || failures % 12 == 0)
                     api.Logger.Warning($"Nimbus heartbeat failed ({failures}x): {ex.Message}");
             }
+
+            PruneInFlightSeamless();
 
             try { await Task.Delay(TimeSpan.FromSeconds(interval), ct).ConfigureAwait(false); }
             catch (OperationCanceledException) { break; }
@@ -299,19 +318,20 @@ public sealed class NimbusServerModSystem : ModSystem
         var old = registry;
         if (config.Enabled && IsConfigured(config))
         {
+            try { stop?.Cancel(); } catch { /* the previous loop is already stopping */ }
+            stop?.Dispose();
             registry = new NimbusRegistryClient(config);
-            if (heartbeatTask == null || heartbeatTask.IsCompleted)
-            {
-                stop?.Dispose();
-                stop = new CancellationTokenSource();
-                if (startUnix == 0) startUnix = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
-                var stopToken = stop.Token;
-                heartbeatTask = Task.Run(() => HeartbeatLoopAsync(stopToken), stopToken);
-            }
+            stop = new CancellationTokenSource();
+            if (startUnix == 0) startUnix = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+            var stopToken = stop.Token;
+            heartbeatTask = Task.Run(() => HeartbeatLoopAsync(stopToken), stopToken);
             LastStatus = "starting";
         }
         else
         {
+            try { stop?.Cancel(); } catch { /* the previous loop is already stopping */ }
+            stop?.Dispose();
+            stop = null;
             registry = null;
             LastStatus = config.Enabled ? "misconfigured" : "disabled";
             // A reload that leaves the mod unwired used to say nothing at all: the command's own
@@ -563,6 +583,8 @@ public sealed class NimbusServerModSystem : ModSystem
         }
         if (LastSeamlessCommit.Length > 0)
             sb.AppendLine("Last seamless commit: " + LastSeamlessCommit);
+        if (LastSeamlessAbort.Length > 0)
+            sb.AppendLine("Last seamless abort: " + LastSeamlessAbort);
         return TextCommandResult.Success(sb.ToString());
     }
 
@@ -641,6 +663,7 @@ public sealed class NimbusServerModSystem : ModSystem
                 transferId = NewTransferId();
                 var pending = new PendingSeamlessHandshake(player.PlayerUID);
                 pendingSeamless[transferId] = pending;
+                int expirySeconds = ComputePrepareExpirySeconds();
 
                 try
                 {
@@ -648,7 +671,8 @@ public sealed class NimbusServerModSystem : ModSystem
                     {
                         TransferId = transferId,
                         TargetServerId = target.ServerId,
-                        Reason = reason ?? "server transfer"
+                        Reason = reason ?? "server transfer",
+                        ExpiresInSeconds = expirySeconds,
                     }, player);
 
                     using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(config.SeamlessPrepareAckTimeoutSeconds));
@@ -667,6 +691,11 @@ public sealed class NimbusServerModSystem : ModSystem
                 {
                     pendingSeamless.TryRemove(transferId, out _);
                 }
+
+                inFlightSeamless[transferId] = new InFlightSeamlessTransfer(
+                    player.PlayerUID,
+                    player,
+                    DateTimeOffset.UtcNow.ToUnixTimeSeconds() + expirySeconds);
             }
 
             Task<TransferIntentResponse> task = string.IsNullOrWhiteSpace(transferId)
@@ -677,7 +706,10 @@ public sealed class NimbusServerModSystem : ModSystem
             if (!response.Ok)
             {
                 if (!string.IsNullOrWhiteSpace(transferId))
+                {
+                    inFlightSeamless.TryRemove(transferId, out _);
                     TrySendSeamlessAbort(player, transferId, "registry rejected seamless transfer");
+                }
                 api?.Logger.Warning($"Nimbus transfer for {player.PlayerName} rejected: {response.Error}");
                 return;
             }
@@ -688,8 +720,61 @@ public sealed class NimbusServerModSystem : ModSystem
         {
             api?.Logger.Warning($"Nimbus transfer async error: {ex.GetType().Name}: {ex.Message}");
             if (!string.IsNullOrWhiteSpace(transferId))
+            {
+                inFlightSeamless.TryRemove(transferId, out _);
                 TrySendSeamlessAbort(player, transferId, "internal error");
+            }
         }
+    }
+
+    private void ProcessFailureNotices(IEnumerable<TransferFailed>? notices)
+    {
+        if (api == null || notices == null) return;
+
+        foreach (var notice in notices)
+        {
+            if (notice is null || string.IsNullOrWhiteSpace(notice.ClientTransferId)
+                || !string.Equals(notice.SourceServerId, config.ServerId, StringComparison.OrdinalIgnoreCase))
+                continue;
+            if (!inFlightSeamless.TryRemove(notice.ClientTransferId, out var transfer))
+                continue;
+
+            string message = string.IsNullOrWhiteSpace(notice.Reason)
+                ? "seamless transfer failed"
+                : notice.Reason;
+            api.Event.EnqueueMainThreadTask(() =>
+            {
+                TrySendSeamlessAbort(transfer.Player, notice.ClientTransferId, message);
+            }, "nimbus-seamless-failure");
+        }
+    }
+
+    private void PruneInFlightSeamless()
+    {
+        long now = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+        foreach (var pair in inFlightSeamless)
+        {
+            if (pair.Value.ExpiresAtUnix <= now && inFlightSeamless.TryRemove(pair.Key, out _))
+                api?.Logger.Warning($"Nimbus seamless transfer expired while waiting for dispatch: {pair.Key}");
+        }
+    }
+
+    private void RemoveInFlightForPlayer(string playerUid)
+    {
+        foreach (var pair in inFlightSeamless.Where(pair =>
+            string.Equals(pair.Value.PlayerUid, playerUid, StringComparison.OrdinalIgnoreCase)))
+        {
+            inFlightSeamless.TryRemove(pair.Key, out _);
+        }
+    }
+
+    private int ComputePrepareExpirySeconds()
+    {
+        int prepareAck = Math.Max(1, config.SeamlessPrepareAckTimeoutSeconds);
+        int readyWait = Math.Max(1, Volatile.Read(ref advertisedReadyWaitTimeoutSeconds));
+        int heartbeat = Math.Max(1, Volatile.Read(ref heartbeatIntervalSeconds));
+        long total = (long)prepareAck + readyWait + heartbeat + 5;
+        return (int)Math.Min(int.MaxValue - 5L, total);
     }
 
     private async Task<TransferIntentResponse> RequestTransferWithClientTransferIdAsync(IServerPlayer player,
@@ -734,7 +819,9 @@ public sealed class NimbusServerModSystem : ModSystem
     {
         try
         {
-            channel?.SendPacket(new NimbusSeamlessAbort { TransferId = transferId, Message = message }, player);
+            if (channel == null) return;
+            channel.SendPacket(new NimbusSeamlessAbort { TransferId = transferId, Message = message }, player);
+            LastSeamlessAbort = $"{player.PlayerName} ({transferId}): {message}";
             api?.Logger.Warning($"Nimbus: seamless transfer aborted for {player.PlayerName}: {message}");
         }
         catch (Exception ex) { api?.Logger.Warning($"Nimbus: seamless abort send failed: {ex.Message}"); }
@@ -745,4 +832,6 @@ public sealed class NimbusServerModSystem : ModSystem
     {
         public TaskCompletionSource<bool> Ready { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
     }
+
+    private sealed record InFlightSeamlessTransfer(string PlayerUid, IServerPlayer Player, long ExpiresAtUnix);
 }

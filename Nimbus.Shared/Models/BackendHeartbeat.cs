@@ -32,5 +32,7 @@ public sealed class BackendHeartbeatResponse
 {
     public bool Ok { get; set; } = true;
     public int NextHeartbeatSeconds { get; set; } = 5;
+    public int SeamlessReadyWaitTimeoutSeconds { get; set; } = 75;
+    public List<TransferFailed> FailedTransfers { get; set; } = new();
     public string? Message { get; set; }
 }

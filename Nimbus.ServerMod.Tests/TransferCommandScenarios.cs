@@ -143,4 +143,32 @@ public class TransferCommandScenarios : AtlasScenarioBase
 
         Assert.DoesNotContain(registry.Requests, r => r.Path == "/api/transfer-intents");
     }
+
+    [AtlasScenario]
+    public async Task AProxyFailureNoticeOnTheNextHeartbeat_AbortsTheSourceTransfer()
+    {
+        using var registry = new FakeRegistry(Secret);
+        registry.ServersSnapshot = FakeRegistry.Snapshot(FakeRegistry.Backend("hub2"));
+        registry.TransferIntentResponse = new { ok = true };
+        registry.FailNextSeamlessIntent = true;
+        NimbusHarness nimbus = await NimbusHarness.ConfigureAsync(World, registry.Url, Secret,
+            reservationRequired: false, transferMode: "seamless", seamlessPrepareAckTimeoutSeconds: 1);
+
+        ITestPlayer player = await World.JoinPlayer("yara");
+        await WaitForSnapshot("hub2");
+
+        CommandResult send = await World.ExecuteCommand("/nimbus send yara hub2");
+        Assert.True(send.Ok, send.Message);
+        await World.Until(() => nimbus.PendingSeamlessTransferId.Length > 0);
+
+        string transferId = nimbus.PendingSeamlessTransferId;
+        nimbus.AcknowledgeSeamlessReady(player, transferId);
+
+        await World.Until(() => registry.Requests.Any(request =>
+            request.Path == "/api/transfer-intents"));
+        await World.Until(() => registry.FailureNoticeDeliveries == 1);
+        await World.Until(() => nimbus.LastSeamlessAbort.Contains(transferId, StringComparison.Ordinal));
+
+        Assert.Contains("target backend is unavailable", nimbus.LastSeamlessAbort);
+    }
 }

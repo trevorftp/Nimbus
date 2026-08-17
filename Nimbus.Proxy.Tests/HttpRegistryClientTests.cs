@@ -74,6 +74,20 @@ public class HttpRegistryClientTests
             return hb;
         }
 
+        public async Task<BackendHeartbeatResponse> HeartbeatResponseAsync(string serverId)
+        {
+            var hb = new BackendHeartbeat
+            {
+                ServerId = serverId,
+                DisplayName = serverId,
+                PublicHost = "10.0.0.1",
+                PublicPort = 42421,
+            };
+            var resp = await Raw.SendAsync(Signed(HttpMethod.Post, "/api/heartbeat", hb));
+            resp.EnsureSuccessStatusCode();
+            return (await resp.Content.ReadFromJsonAsync<BackendHeartbeatResponse>())!;
+        }
+
         public async Task<TransferIntent> QueueIntentAsync(TransferIntentRequest request)
         {
             var resp = await Raw.SendAsync(Signed(HttpMethod.Post, "/api/transfer-intents", request));
@@ -397,6 +411,28 @@ public class HttpRegistryClientTests
         Assert.Empty(second);
     }
 
+    [Fact]
+    public async Task ASeamlessFailure_IsReportedAndReturnedOnTheSourceHeartbeat()
+    {
+        await using var registry = await Registry.StartAsync();
+        await registry.RegisterBackendAsync("source");
+        using var client = ClientFor(registry);
+
+        Assert.True(await client.ReportTransferFailureAsync(new TransferFailed
+        {
+            SourceServerId = "source",
+            ClientTransferId = "transfer-51",
+            Reason = "proxy timed out",
+        }, Ct));
+
+        var response = await registry.HeartbeatResponseAsync("source");
+        var failure = Assert.Single(response.FailedTransfers);
+        Assert.Equal("transfer-51", failure.ClientTransferId);
+        Assert.Equal("proxy timed out", failure.Reason);
+
+        Assert.Empty((await registry.HeartbeatResponseAsync("source")).FailedTransfers);
+    }
+
     // ---- api tokens ----
 
     [Fact]
@@ -498,6 +534,11 @@ public class HttpRegistryClientTests
         Assert.Null(await client.AddWhitelistAsync(new WhitelistRequest { PlayerUid = "uid-1" }, Ct));
         Assert.False(await client.RemoveWhitelistAsync("uid-1", null, Ct));
         Assert.Empty(await client.DrainTransferIntentsAsync(Ct));
+        Assert.False(await client.ReportTransferFailureAsync(new TransferFailed
+        {
+            SourceServerId = "source",
+            ClientTransferId = "transfer-1",
+        }, Ct));
         Assert.Null(await client.CreateApiTokenAsync(new ApiTokenCreateRequest
         { Name = "bot", Scopes = new List<string> { "bans:read" } }, Ct));
         Assert.Null(await client.GetApiTokensAsync(Ct));
@@ -531,10 +572,30 @@ public class HttpRegistryClientTests
         Assert.Null(await client.AddWhitelistAsync(new WhitelistRequest { PlayerUid = "uid-1" }, Ct));
         Assert.False(await client.RemoveWhitelistAsync("uid-1", null, Ct));
         Assert.Empty(await client.DrainTransferIntentsAsync(Ct));
+        Assert.False(await client.ReportTransferFailureAsync(new TransferFailed
+        {
+            SourceServerId = "source",
+            ClientTransferId = "transfer-1",
+        }, Ct));
         Assert.Null(await client.CreateApiTokenAsync(new ApiTokenCreateRequest
         { Name = "bot", Scopes = new List<string> { "bans:read" } }, Ct));
         Assert.Null(await client.GetApiTokensAsync(Ct));
         Assert.False(await client.RevokeApiTokenAsync("a1b2c3", Ct));
+    }
+
+    [Fact]
+    public async Task ACanceledFailureReport_ReturnsFalse()
+    {
+        await using var registry = await Registry.StartAsync();
+        using var client = ClientFor(registry);
+        using var cts = new CancellationTokenSource();
+        cts.Cancel();
+
+        Assert.False(await client.ReportTransferFailureAsync(new TransferFailed
+        {
+            SourceServerId = "source",
+            ClientTransferId = "transfer-canceled",
+        }, cts.Token));
     }
 
     [Fact]

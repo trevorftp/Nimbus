@@ -29,6 +29,7 @@ public class NimbusPacketTagTests
         { typeof(NimbusSeamlessPrepare), nameof(NimbusSeamlessPrepare.Reason), 1 },
         { typeof(NimbusSeamlessPrepare), nameof(NimbusSeamlessPrepare.TargetServerId), 2 },
         { typeof(NimbusSeamlessPrepare), nameof(NimbusSeamlessPrepare.TransferId), 3 },
+        { typeof(NimbusSeamlessPrepare), nameof(NimbusSeamlessPrepare.ExpiresInSeconds), 4 },
 
         { typeof(NimbusSeamlessCommit), nameof(NimbusSeamlessCommit.TransferId), 1 },
 
@@ -60,7 +61,10 @@ public class NimbusPacketTagTests
     [MemberData(nameof(ContractPairs))]
     public void TheNumbersAreTheOnesProtobufWasAlreadyHandingOut(Type legacy, Type pinned)
     {
-        Assert.Equal(TagsOf(legacy), TagsOf(pinned));
+        var oldTags = TagsOf(legacy);
+        var newTags = TagsOf(pinned);
+        foreach (var (member, tag) in oldTags)
+            Assert.Equal(tag, newTags[member]);
     }
 
     /// <summary>
@@ -104,6 +108,43 @@ public class NimbusPacketTagTests
 
         foreach (var (member, expected) in values)
             Assert.Equal(expected, legacy.GetProperty(member)!.GetValue(read));
+    }
+
+    [Fact]
+    public void ANewPrepareExpiryIsIgnoredByAnOldClient()
+    {
+        var packet = new NimbusSeamlessPrepare
+        {
+            TransferId = "tid",
+            TargetServerId = "srv",
+            Reason = "why",
+            ExpiresInSeconds = 88,
+        };
+
+        var read = (Legacy.NimbusSeamlessPrepare)Deserialize(
+            typeof(Legacy.NimbusSeamlessPrepare), Serialize(packet));
+
+        Assert.Equal("tid", read.TransferId);
+        Assert.Equal("srv", read.TargetServerId);
+        Assert.Equal("why", read.Reason);
+    }
+
+    [Fact]
+    public void AnOldPrepareLeavesTheNewExpiryAtZero()
+    {
+        var packet = new Legacy.NimbusSeamlessPrepare
+        {
+            TransferId = "tid",
+            TargetServerId = "srv",
+            Reason = "why",
+        };
+
+        var read = (NimbusSeamlessPrepare)Deserialize(typeof(NimbusSeamlessPrepare), Serialize(packet));
+
+        Assert.Equal("tid", read.TransferId);
+        Assert.Equal("srv", read.TargetServerId);
+        Assert.Equal("why", read.Reason);
+        Assert.Equal(0, read.ExpiresInSeconds);
     }
 
     /// <summary>

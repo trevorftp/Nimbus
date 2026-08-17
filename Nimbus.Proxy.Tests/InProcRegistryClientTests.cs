@@ -39,6 +39,7 @@ public class InProcRegistryClientTests
         public required BackendRegistry Backends { get; init; }
         public required ReservationStore Reservations { get; init; }
         public required TransferIntentStore Intents { get; init; }
+        public required TransferFailureStore Failures { get; init; }
         public required BanStore Bans { get; init; }
         public required WhitelistStore Whitelist { get; init; }
         public required ApiTokenStore Tokens { get; init; }
@@ -53,6 +54,7 @@ public class InProcRegistryClientTests
             var backends = new BackendRegistry(registryCfg, clock);
             var reservations = new ReservationStore(clock);
             var intents = new TransferIntentStore(clock);
+            var failures = new TransferFailureStore(clock);
             var bans = new BanStore(clock);
             var whitelist = new WhitelistStore(clock);
             var tokens = new ApiTokenStore(clock);
@@ -63,6 +65,7 @@ public class InProcRegistryClientTests
                     Backends = backends,
                     Reservations = reservations,
                     Intents = intents,
+                    Failures = failures,
                     Bans = bans,
                     Whitelist = whitelist,
                     Tokens = tokens,
@@ -70,6 +73,7 @@ public class InProcRegistryClientTests
                 Backends = backends,
                 Reservations = reservations,
                 Intents = intents,
+                Failures = failures,
                 Bans = bans,
                 Whitelist = whitelist,
                 Tokens = tokens,
@@ -90,6 +94,23 @@ public class InProcRegistryClientTests
     }
 
     private static CancellationToken Ct => CancellationToken.None;
+
+    [Fact]
+    public async Task AFailureNotice_IsStoredByTheEmbeddedClient()
+    {
+        var e = Embedded.Create();
+
+        Assert.True(await e.Client.ReportTransferFailureAsync(new TransferFailed
+        {
+            SourceServerId = "backend-1",
+            ClientTransferId = "transfer-51",
+            Reason = "target unavailable",
+        }, Ct));
+
+        var failure = Assert.Single(e.Failures.DrainForSource("backend-1"));
+        Assert.Equal("transfer-51", failure.ClientTransferId);
+        Assert.Equal("target unavailable", failure.Reason);
+    }
 
     // ---- minting: who gets a reservation ----
 

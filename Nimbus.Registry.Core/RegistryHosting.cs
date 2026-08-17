@@ -9,6 +9,7 @@ using Nimbus.Registry.Services;
 namespace Nimbus.Registry;
 
 // Wires the registry services (BackendRegistry, ReservationStore, TransferIntentStore,
+// TransferFailureStore,
 // NonceCache, sweeper, optional master-server broadcaster) into a WebApplicationBuilder,
 // and maps the HMAC-authed /api/* endpoints. Used by the standalone Nimbus.Registry exe
 // and by Nimbus.Proxy's embedded registry mode (single-process deployments).
@@ -23,7 +24,18 @@ public static class RegistryHosting
         builder.Services.AddSingleton<BackendRegistry>();
         builder.Services.AddSingleton<ReservationStore>();
         builder.Services.AddSingleton<TransferIntentStore>();
+        builder.Services.AddSingleton<TransferFailureStore>();
         builder.Services.AddSingleton<NonceCache>();
+        builder.Services.AddSingleton(sp => new RegistryStores
+        {
+            Backends = sp.GetRequiredService<BackendRegistry>(),
+            Reservations = sp.GetRequiredService<ReservationStore>(),
+            Intents = sp.GetRequiredService<TransferIntentStore>(),
+            Failures = sp.GetRequiredService<TransferFailureStore>(),
+            Bans = sp.GetRequiredService<BanStore>(),
+            Whitelist = sp.GetRequiredService<WhitelistStore>(),
+            Tokens = sp.GetRequiredService<ApiTokenStore>(),
+        });
         // The two moderation lists are the only state worth keeping across a restart, and they
         // are built by hand rather than by type so the state directory from config reaches them.
         builder.Services.AddSingleton(sp => new BanStore(sp.GetRequiredService<TimeProvider>(),
@@ -60,38 +72,34 @@ public static class RegistryHosting
 // Background sweep: prune stale backends, expired reservations, and old nonces.
 public sealed class RegistrySweeper : BackgroundService
 {
-    private readonly BackendRegistry _backends;
-    private readonly ReservationStore _reservations;
-    private readonly TransferIntentStore _intents;
+    private readonly RegistryStores _stores;
     private readonly NonceCache _nonces;
-    private readonly BanStore _bans;
-    private readonly WhitelistStore _whitelist;
     private readonly ILogger<RegistrySweeper> _log;
 
-    public RegistrySweeper(BackendRegistry b, ReservationStore r, TransferIntentStore i, NonceCache n, BanStore bans,
-        WhitelistStore whitelist, ILogger<RegistrySweeper> log)
-    { _backends = b; _reservations = r; _intents = i; _nonces = n; _bans = bans; _whitelist = whitelist; _log = log; }
+    public RegistrySweeper(RegistryStores stores, NonceCache nonces, ILogger<RegistrySweeper> log)
+    { _stores = stores; _nonces = nonces; _log = log; }
+
+    internal int SweepOnce()
+    {
+        int b = _stores.Backends.Prune();
+        int r = _stores.Reservations.Prune();
+        int i = _stores.Intents.Prune();
+        int f = _stores.Failures.Prune();
+        int n = _nonces.Prune();
+        int x = _stores.Bans.Prune();
+        int w = _stores.Whitelist.Prune();
+        int dropped = b + r + i + f + n + x + w;
+        if (dropped > 0 && _log.IsEnabled(LogLevel.Debug))
+            _log.LogDebug("sweep: dropped backends={B} reservations={R} intents={I} failures={F} nonces={N} bans={X} whitelist={W}", b, r, i, f, n, x, w);
+        return dropped;
+    }
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
         var period = TimeSpan.FromSeconds(15);
         while (!stoppingToken.IsCancellationRequested)
         {
-            try
-            {
-                int b = _backends.Prune();
-                int r = _reservations.Prune();
-                int i = _intents.Prune();
-                int n = _nonces.Prune();
-                int x = _bans.Prune();
-                int w = _whitelist.Prune();
-                // The level check is not ceremony here: the registry runs at minimum level Warning
-                // with a provider that accepts nothing below it, so this line never prints, and
-                // without the check the six counters are boxed into an object[] every fifteen
-                // seconds for a message that is discarded on the way out.
-                if (b + r + i + n + x + w > 0 && _log.IsEnabled(LogLevel.Debug))
-                    _log.LogDebug("sweep: dropped backends={B} reservations={R} intents={I} nonces={N} bans={X} whitelist={W}", b, r, i, n, x, w);
-            }
+            try { SweepOnce(); }
             catch (Exception ex)
             {
                 _log.LogError(ex, "sweep failed");

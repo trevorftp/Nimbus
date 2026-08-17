@@ -28,6 +28,8 @@ internal interface IRegistryClient
 
     Task<List<TransferIntent>> DrainTransferIntentsAsync(CancellationToken ct);
 
+    Task<bool> ReportTransferFailureAsync(TransferFailed failure, CancellationToken ct);
+
     // Network bans. The proxy keeps a local cache of these (BanCache) because the connection
     // gate cannot afford a registry round-trip per join; these calls are the refresh and the
     // write path behind the admin commands.
