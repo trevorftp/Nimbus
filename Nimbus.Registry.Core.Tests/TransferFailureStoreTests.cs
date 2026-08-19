@@ -122,4 +122,50 @@ public class TransferFailureStoreTests
         var notice = Assert.Single(store.DrainForSource("source"));
         Assert.Equal("a later attempt", notice.Reason);
     }
+
+    [Fact]
+    public void Add_StripsNewlinesFromReason()
+    {
+        var store = new TransferFailureStore(clock);
+        store.Add(new TransferFailed
+        {
+            SourceServerId = "source",
+            ClientTransferId = "t1",
+            Reason = "line one\nline two\r\nline three",
+        });
+
+        var notice = Assert.Single(store.DrainForSource("source"));
+        Assert.Equal("line one line two  line three", notice.Reason);
+    }
+
+    [Fact]
+    public void Add_CapsReasonLengthAt200()
+    {
+        var store = new TransferFailureStore(clock);
+        string longReason = new string('x', 300);
+        store.Add(new TransferFailed
+        {
+            SourceServerId = "source",
+            ClientTransferId = "t1",
+            Reason = longReason,
+        });
+
+        var notice = Assert.Single(store.DrainForSource("source"));
+        Assert.Equal(200, notice.Reason.Length);
+    }
+
+    [Fact]
+    public void Add_FallsBackToDefaultWhenReasonIsNull()
+    {
+        var store = new TransferFailureStore(clock);
+        store.Add(new TransferFailed
+        {
+            SourceServerId = "source",
+            ClientTransferId = "t1",
+            Reason = null!,
+        });
+
+        var notice = Assert.Single(store.DrainForSource("source"));
+        Assert.Equal("seamless transfer failed", notice.Reason);
+    }
 }

@@ -34,7 +34,7 @@ public sealed class TransferFailureStore
         {
             ClientTransferId = failure.ClientTransferId.Trim(),
             SourceServerId = failure.SourceServerId.Trim(),
-            Reason = failure.Reason ?? "seamless transfer failed",
+            Reason = SanitizeReason(failure.Reason),
             FailedAtUnix = failure.FailedAtUnix > 0 ? failure.FailedAtUnix : now,
         };
         string key = Key(notice.SourceServerId, notice.ClientTransferId);
@@ -91,6 +91,16 @@ public sealed class TransferFailureStore
             }
         }
         return dropped;
+    }
+
+    private const int MaxReasonLength = 200;
+
+    private static string SanitizeReason(string? reason)
+    {
+        if (string.IsNullOrWhiteSpace(reason))
+            return "seamless transfer failed";
+        string clean = reason.Replace('\n', ' ').Replace('\r', ' ');
+        return clean.Length > MaxReasonLength ? clean[..MaxReasonLength] : clean;
     }
 
     private static string Key(string sourceServerId, string clientTransferId)
