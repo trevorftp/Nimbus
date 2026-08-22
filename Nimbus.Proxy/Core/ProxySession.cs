@@ -1023,6 +1023,15 @@ internal sealed partial class ProxySession : IPlayer
             if (ph == SessionState.Phase.Ready || ph == SessionState.Phase.Disconnecting)
                 kickedByBackend = true;
         }
+
+        // Either direction ending outside a swap ends the session, so stop the sibling instead of
+        // leaving it blocked on a read that only returns when the far end notices on its own. Until
+        // it did, the session sat in the table and PlayerDisconnectEvent had not fired, so `list`
+        // and the metrics counted a player who had already gone (#89). Cancelling here is safe
+        // during a swap too, since the swap owns its own source and installs the next pair only
+        // after both of these have run.
+        if (!closed && !swapping)
+            try { pumpCts?.Cancel(); } catch { /* teardown disposed it first */ }
     }
 
     private async Task<string?> EnsureInitialReservationAsync(BackendEndpoint? target, string reason)
