@@ -115,6 +115,10 @@ internal sealed class SessionHarness : IDisposable
         await player.GetStream().FlushAsync(cts.Token);
     }
 
+    /// <summary>Drops the player's socket and leaves the backend up, which is what a client
+    /// crashing or losing its connection looks like from the proxy's side.</summary>
+    public void DropPlayerSocket() => player.Close();
+
     /// <summary>Sends Identification and waits for the session to have picked the uid up, which is
     /// what puts the gates, the sticky reconciliation and the transfer paths in play.</summary>
     public async Task IdentifyAsync(string uid = "uid-1", string name = "alice")

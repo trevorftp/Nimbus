@@ -363,6 +363,55 @@ public class ProxySessionLifecycleTests
         Assert.True(await WaitForSent(harness.Backends["hub"], line));
     }
 
+    // The player's socket dying stops the c->s pump, but the s->c pump was left blocked on a read
+    // from a backend with nothing to say, so the session outlived the player until the backend
+    // timed out on its own (#89). The backend here stays open on purpose: if the session only ends
+    // because the far end gave up, this waits forever instead of passing.
+    [Fact]
+    public async Task APlayerDroppingItsSocket_EndsTheSessionWithoutWaitingOnTheBackend()
+    {
+        using var harness = await SessionHarness.StartAsync("hub");
+        await harness.ReachReadyAsync();
+
+        harness.DropPlayerSocket();
+
+        var finished = await Task.WhenAny(harness.Running, Task.Delay(5000));
+        Assert.Same(harness.Running, finished);
+    }
+
+    // The sibling cancelled by the fix above exits through the same place a backend hanging up
+    // does, so without the first-exit record the client leaving looked exactly like the backend
+    // kicking the player out.
+    [Fact]
+    public async Task APlayerDroppingItsSocket_IsNotReportedAsABackendKick()
+    {
+        using var harness = await SessionHarness.StartAsync("hub");
+        var kicks = new List<ServerKickedEvent>();
+        harness.Events.Subscribe<ServerKickedEvent>(evt => { lock (kicks) kicks.Add(evt); });
+        await harness.ReachReadyAsync();
+
+        harness.DropPlayerSocket();
+        Assert.Same(harness.Running, await Task.WhenAny(harness.Running, Task.Delay(5000)));
+
+        lock (kicks) Assert.Empty(kicks);
+    }
+
+    // The other half of the same record: a backend that really does hang up still has to be
+    // reported, exactly once, rather than being silenced along with the false positive.
+    [Fact]
+    public async Task ABackendHangingUp_IsStillReportedExactlyOnce()
+    {
+        using var harness = await SessionHarness.StartAsync("hub");
+        var kicks = new List<ServerKickedEvent>();
+        harness.Events.Subscribe<ServerKickedEvent>(evt => { lock (kicks) kicks.Add(evt); });
+        await harness.ReachReadyAsync();
+
+        harness.Backends["hub"].DropConnections();
+        Assert.Same(harness.Running, await Task.WhenAny(harness.Running, Task.Delay(5000)));
+
+        lock (kicks) Assert.Single(kicks);
+    }
+
     private static async Task<bool> WaitForSent(RecordingBackend backend, string needle, int millis = 8000)
     {
         var deadline = DateTime.UtcNow.AddMilliseconds(millis);

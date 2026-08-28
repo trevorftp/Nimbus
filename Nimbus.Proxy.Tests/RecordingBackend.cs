@@ -13,6 +13,7 @@ internal sealed class RecordingBackend : IDisposable
     private readonly TcpListener listener;
     private readonly CancellationTokenSource cts = new();
     private readonly List<byte> received = new();
+    private readonly List<TcpClient> accepted = new();
     private readonly object gate = new();
     private int connections;
 
@@ -47,6 +48,7 @@ internal sealed class RecordingBackend : IDisposable
             {
                 var client = await listener.AcceptTcpClientAsync(cts.Token).ConfigureAwait(false);
                 Interlocked.Increment(ref connections);
+                lock (gate) accepted.Add(client);
                 _ = Task.Run(() => ReadLoopAsync(client));
             }
         }
@@ -66,6 +68,18 @@ internal sealed class RecordingBackend : IDisposable
             }
         }
         catch { }
+    }
+
+    /// <summary>Closes every connection accepted so far, leaving the listener up. This is what a
+    /// backend process dying under a live session looks like from the proxy's side, which
+    /// Dispose does not reproduce: cancelling the read loop leaves the socket open.</summary>
+    public void DropConnections()
+    {
+        lock (gate)
+        {
+            foreach (var c in accepted) { try { c.Close(); } catch { /* already gone */ } }
+            accepted.Clear();
+        }
     }
 
     public void Dispose()
