@@ -68,6 +68,11 @@ internal sealed partial class ProxySession : IPlayer
     private long s2cBytes;
     private volatile bool kickedByBackend;
 
+    // Which direction's pump exited first for the current pair, 0 until one does. Set once with a
+    // compare-exchange so the loser of the race can tell that its own exit was the cancellation
+    // below rather than its own end of the wire going away.
+    private int firstPumpExit;
+
     // Initial-join reservation state for the currently connected backend:
     //   0 = pending, 1 = done (or not needed), 2 = failed terminal.
     private int initialReservationState;
@@ -910,6 +915,8 @@ internal sealed partial class ProxySession : IPlayer
 
     private void StartPumps()
     {
+        // A swap installs a fresh pair, so the previous pair's winner must not be inherited.
+        Interlocked.Exchange(ref firstPumpExit, 0);
         pumpCts = CancellationTokenSource.CreateLinkedTokenSource(sessionStopToken);
         pumpC2S = PumpAsync("c->s", clientStream, upstream!.GetStream(), sniffC2S, isC2S: true, pumpCts.Token);
         pumpS2C = PumpAsync("s->c", upstream.GetStream(), clientStream, sniffS2C, isC2S: false, pumpCts.Token);
@@ -1015,22 +1022,26 @@ internal sealed partial class ProxySession : IPlayer
         }
         Log.Trace($"[s{Id}] {label} pump exited ({total} bytes this segment)");
 
-        // s->c pump exiting without our own Close() or a swap in flight means the backend
+        // Only one of the two can be the reason this session is ending; the other is here because
+        // the cancellation below reached it. Claiming that spot atomically is what keeps a client
+        // drop from being read as a backend kick, since the sibling it cancels exits through this
+        // same method and would otherwise look exactly like a backend that hung up.
+        bool endedTheSession = Interlocked.CompareExchange(ref firstPumpExit, isC2S ? 1 : 2, 0) == 0;
+
+        // s->c pump exiting on its own, without our Close() or a swap in flight, means the backend
         // dropped the connection while the player was live.
-        if (!isC2S && !closed && !swapping)
+        if (!isC2S && endedTheSession && !closed && !swapping)
         {
             var ph = Phase;
             if (ph == SessionState.Phase.Ready || ph == SessionState.Phase.Disconnecting)
                 kickedByBackend = true;
         }
 
-        // Either direction ending outside a swap ends the session, so stop the sibling instead of
-        // leaving it blocked on a read that only returns when the far end notices on its own. Until
-        // it did, the session sat in the table and PlayerDisconnectEvent had not fired, so `list`
-        // and the metrics counted a player who had already gone (#89). Cancelling here is safe
-        // during a swap too, since the swap owns its own source and installs the next pair only
-        // after both of these have run.
-        if (!closed && !swapping)
+        // Whichever direction ended first ends the session, so stop the sibling instead of leaving
+        // it blocked on a read that only returns when the far end notices on its own. Until it did,
+        // the session sat in the table and PlayerDisconnectEvent had not fired, so `list` and the
+        // metrics counted a player who had already gone (#89).
+        if (endedTheSession && !closed && !swapping)
             try { pumpCts?.Cancel(); } catch { /* teardown disposed it first */ }
     }
 
